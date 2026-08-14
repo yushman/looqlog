@@ -1,0 +1,6 @@
+{"level":"info","message":"line one"}
+{"level":"info","message":"line two"}
+not json at all, just text
+{"level":"warn","message":"line four"}
+[1,2,3]
+{"level":"error","message":"line six"}

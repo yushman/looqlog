@@ -1,0 +1,10 @@
+ts=2026-08-08T17:42:01Z level=info msg="server started" service=api port=8080
+ts=2026-08-08T17:42:02Z level=debug msg="config loaded" service=api
+ts=2026-08-08T17:42:03Z level=warning msg="slow query detected" service=db duration_ms=842
+ts=2026-08-08T17:42:04Z level=error msg="connection refused" service=api upstream=cache
+ts=2026-08-08T17:42:05Z level=info msg="request completed" service=api status=200
+ts=2026-08-08T17:42:06Z level=critical msg="disk full" service=worker
+ts=2026-08-08T17:42:07Z level=info msg="job processed" service=worker job_id=j-1
+ts=2026-08-08T17:42:08Z level=trace msg="cache lookup" service=cache key=session:42
+ts=2026-08-08T17:42:09Z level=info msg="health check passed" service=api
+ts=2026-08-08T17:42:10Z level=err msg="timeout waiting for upstream" service=api upstream=db

@@ -1,0 +1,9 @@
+.idea
+.iml
+target/
+.playwright-mcp/
+web/node_modules/
+web/dist/
+# wasm-pack output vendored by scripts/build-frontend.sh (ADR-0008) — regenerated,
+# not source; the committed copy lives in crates/looq/assets/wasm/.
+web/public/wasm/

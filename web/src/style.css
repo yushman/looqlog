@@ -1,0 +1,631 @@
+/* Legible in both appearances (`theming` spec, design.md D6). Colors are tokens on
+   :root (light, the default) and re-pointed under both `prefers-color-scheme: dark`
+   (the "Auto" case) and `[data-theme="dark"]` (the explicit override, which must win
+   over the system preference either direction — see web/src/theme.ts). No element's
+   color/background is ever hardcoded outside these two blocks. No external
+   fonts/stylesheets/images anywhere in this file — `system-ui`/`ui-monospace` are
+   locally-installed system font stacks, not network fetches, so both appearances
+   render fully with the network disabled. */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #55575c;
+  --border: rgba(0, 0, 0, 0.18);
+  --code-bg: rgba(0, 0, 0, 0.07);
+
+  --accent: #2563eb;
+  --accent-fg: #1e3a8a;
+  --accent-bg: rgba(37, 99, 235, 0.12);
+
+  --error: #b91c1c;
+  --error-fg: #ffffff;
+  --error-bg: rgba(185, 28, 28, 0.12);
+
+  --warn: #92400e;
+  --warn-fg: #ffffff;
+  --warn-bg: rgba(217, 119, 6, 0.16);
+
+  --success: #15803d;
+
+  --hl-bg: rgba(250, 204, 21, 0.55);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121212;
+    --fg: #e9e9e9;
+    --muted: #a8abb3;
+    --border: rgba(255, 255, 255, 0.22);
+    --code-bg: rgba(255, 255, 255, 0.1);
+
+    --accent: #7aa8ff;
+    --accent-fg: #bcd2ff;
+    --accent-bg: rgba(122, 168, 255, 0.2);
+
+    --error: #ff8a80;
+    --error-fg: #1a1a1a;
+    --error-bg: rgba(255, 138, 128, 0.18);
+
+    --warn: #ffca7a;
+    --warn-fg: #1a1a1a;
+    --warn-bg: rgba(255, 202, 122, 0.2);
+
+    --success: #6fe08a;
+
+    --hl-bg: rgba(250, 204, 21, 0.45);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #121212;
+  --fg: #e9e9e9;
+  --muted: #a8abb3;
+  --border: rgba(255, 255, 255, 0.22);
+  --code-bg: rgba(255, 255, 255, 0.1);
+
+  --accent: #7aa8ff;
+  --accent-fg: #bcd2ff;
+  --accent-bg: rgba(122, 168, 255, 0.2);
+
+  --error: #ff8a80;
+  --error-fg: #1a1a1a;
+  --error-bg: rgba(255, 138, 128, 0.18);
+
+  --warn: #ffca7a;
+  --warn-fg: #1a1a1a;
+  --warn-bg: rgba(255, 202, 122, 0.2);
+
+  --success: #6fe08a;
+
+  --hl-bg: rgba(250, 204, 21, 0.45);
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  max-width: 900px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+h1 {
+  margin-bottom: 0.25rem;
+}
+
+.theme-toggle {
+  font-size: 0.85em;
+  padding: 0.3em 0.7em;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  height: fit-content;
+}
+
+.sub {
+  color: var(--muted);
+  margin-top: 0;
+}
+
+code {
+  background: var(--code-bg);
+  padding: 0.1em 0.3em;
+  border-radius: 4px;
+}
+
+.privacy-note {
+  font-size: 0.9em;
+  color: var(--muted);
+}
+
+.drop-zone {
+  border: 2px dashed var(--muted);
+  border-radius: 8px;
+  padding: 3rem 1rem;
+  text-align: center;
+  margin-top: 1rem;
+}
+
+.drop-zone.drag {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.status {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+}
+
+.status.done {
+  color: var(--success);
+}
+
+.status.done.zero-entries-warning {
+  color: var(--warn);
+  font-weight: bold;
+}
+
+/* ---- error / confirm banners (`error-states` spec) ------------------------- */
+/* Persistent, not toasts (design.md D5): shown via `hidden`, dismissed by an
+   explicit click, never a timer. */
+
+/* `.error-banner`/`.confirm-banner { display: flex }` below has the same (0,1,0)
+   specificity as the UA stylesheet's `[hidden] { display: none }`, and — being an
+   author rule — would otherwise win the tie and defeat the `hidden` attribute,
+   showing an empty banner on every load regardless of `errorMessage`/
+   `pendingConfirm` (caught by an actual Playwright screenshot, not by inspection —
+   see docs/devlog.md). These two rules restore `hidden`'s effect explicitly. */
+.error-banner[hidden],
+.confirm-banner[hidden] {
+  display: none;
+}
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+  margin: 0.75rem 0;
+  padding: 0.6em 0.9em;
+  border-radius: 6px;
+  background: var(--error-bg);
+  border: 1px solid var(--error);
+  color: var(--error);
+  font-weight: bold;
+}
+
+.error-banner button {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-weight: bold;
+  font-size: 1.2em;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.3em;
+}
+
+.confirm-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75em;
+  margin: 0.75rem 0;
+  padding: 0.6em 0.9em;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn);
+  color: var(--warn);
+}
+
+.confirm-banner button {
+  font-weight: bold;
+  cursor: pointer;
+  border: 1px solid var(--warn);
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+  padding: 0.2em 0.7em;
+}
+
+looq-detection .detection.warning,
+looq-detection.fallback,
+looq-detection.low-confidence {
+  color: var(--warn);
+  font-weight: bold;
+}
+
+looq-diagnostics .diagnostics.warning {
+  color: var(--error);
+  font-weight: bold;
+}
+
+.diagnostics-counts,
+.diagnostics-examples {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.provisional-note {
+  font-size: 0.85em;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.zero-entries {
+  font-style: italic;
+  color: var(--muted);
+}
+
+.live-tail-topbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.conn-indicator {
+  font-weight: bold;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 0.15em 0.6em;
+  border-radius: 999px;
+  font-size: 0.85em;
+}
+
+.conn-indicator.conn-live {
+  color: #fff;
+  background: #16a34a;
+}
+
+.conn-indicator.conn-connecting {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.conn-indicator.conn-ended {
+  color: var(--accent-fg);
+  background: var(--accent-bg);
+}
+
+.conn-indicator.conn-disconnected {
+  color: #fff;
+  background: #b91c1c;
+}
+
+.lines-per-sec {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.mode-indicator {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.eviction-note {
+  color: var(--warn);
+}
+
+.autoscroll-controls {
+  margin: 0.5rem 0;
+}
+
+.gap-note {
+  color: var(--warn);
+}
+
+/* ---- looq-filter-bar ------------------------------------------------------- */
+
+.filter-bar {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.filter-rule-note {
+  font-size: 0.8em;
+  color: var(--muted);
+  margin: 0 0 0.5em;
+}
+
+.filter-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+}
+
+.filter-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35em;
+}
+
+.filter-field-name {
+  font-weight: bold;
+  font-size: 0.85em;
+  color: var(--muted);
+  min-width: 5em;
+}
+
+.filter-chip {
+  font-size: 0.85em;
+  padding: 0.15em 0.6em;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+}
+
+.filter-chip.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: bold;
+}
+
+.chip-count {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.filter-typed-entry {
+  display: inline-flex;
+  gap: 0.25em;
+}
+
+.filter-typed-entry input {
+  font-size: 0.85em;
+  padding: 0.1em 0.4em;
+}
+
+.filter-search-row {
+  display: flex;
+  gap: 0.5em;
+  margin-top: 0.5em;
+}
+
+.filter-search-row input[type="search"] {
+  flex: 1;
+  padding: 0.3em 0.5em;
+}
+
+.filter-query-error {
+  color: var(--error);
+  font-size: 0.85em;
+  margin: 0.35em 0 0;
+}
+
+.filter-count {
+  font-size: 0.85em;
+  color: var(--muted);
+  margin: 0.35em 0 0;
+}
+
+.filter-count-empty {
+  color: var(--warn);
+  font-weight: bold;
+}
+
+/* Search-match highlighting: a plain span, not <mark> — see highlightHtml's doc
+   comment in looq-entry-table.ts for why (a real, measured cost, not style taste). */
+.hl {
+  background: var(--hl-bg);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.hash-notice {
+  color: var(--warn);
+  font-size: 0.85em;
+}
+
+.share-link-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75em;
+  margin: 0.5rem 0;
+}
+
+.share-caveat {
+  font-size: 0.85em;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* ---- looq-timeline ------------------------------------------------------- */
+
+.timeline-summary {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.timeline-outlier-note {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.timeline-outlier-note button {
+  font-size: 0.85em;
+}
+
+.timeline-chart {
+  min-height: 140px;
+}
+
+.timeline-controls {
+  margin-top: 0.25rem;
+}
+
+/* ---- looq-entry-table ------------------------------------------------------ */
+
+.entry-table-summary {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.entry-table-header,
+.entry-row {
+  display: grid;
+  grid-template-columns: 3.5rem 14rem 6rem 1fr;
+  gap: 0.5em;
+  align-items: baseline;
+}
+
+.entry-table-header {
+  font-weight: bold;
+  font-size: 0.8em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding: 0.25em 0.5em;
+}
+
+.entry-table-viewport {
+  height: 480px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  position: relative;
+}
+
+.entry-table-spacer {
+  position: relative;
+}
+
+.entry-table-rows {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.entry-row {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  padding: 0 0.5em;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.entry-row:nth-child(odd) {
+  background: var(--code-bg);
+}
+
+.entry-row:hover {
+  background: var(--accent-bg);
+}
+
+.entry-row.selected {
+  background: var(--accent-bg);
+}
+
+.entry-row .col-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.absent {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.level-badge {
+  font-weight: bold;
+  padding: 0 0.4em;
+  border-radius: 3px;
+}
+
+.level-badge.level-error,
+.level-badge.level-fatal,
+.level-badge.level-critical {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.level-badge.level-warn,
+.level-badge.level-warning {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.level-badge.level-info {
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+.level-badge.level-debug,
+.level-badge.level-trace {
+  background: var(--code-bg);
+  color: var(--muted);
+}
+
+.eviction-banner {
+  color: var(--warn);
+}
+
+.entry-detail-panel {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.9em;
+}
+
+.detail-close {
+  float: right;
+}
+
+.detail-core {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15em 0.75em;
+  margin: 0 0 0.5em;
+}
+
+.detail-core dt {
+  font-weight: bold;
+  color: var(--muted);
+}
+
+.detail-core dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.detail-message-label,
+.detail-fields-label {
+  font-weight: bold;
+  color: var(--muted);
+  margin: 0.5em 0 0.25em;
+}
+
+.detail-message {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--code-bg);
+  padding: 0.5em;
+  border-radius: 4px;
+  margin: 0;
+}
+
+.detail-fields {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.detail-fields th,
+.detail-fields td {
+  border: 1px solid var(--border);
+  padding: 0.25em 0.5em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.detail-json {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}

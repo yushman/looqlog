@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/looq",
+    "crates/looq-core",
+    "crates/looq-wasm",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/looq-dev/looq"
+
+[profile.release]
+opt-level = "s"
+lto = true
+# release-hardening: strip debug symbols from the distributed binary (smaller
+# artifact, no local path/symbol leakage in the release build). `core.wasm` is
+# built by wasm-pack/wasm-opt separately (scripts/build-frontend.sh) and is
+# unaffected by this workspace profile.
+strip = true

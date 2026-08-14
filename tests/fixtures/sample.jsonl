@@ -1,0 +1,20 @@
+{"timestamp":"2026-08-08T17:00:00Z","level":"INFO","message":"server started","service":"api"}
+{"timestamp":"2026-08-08T17:00:01Z","level":"INFO","message":"listening on 127.0.0.1:7891","service":"api"}
+{"timestamp":"2026-08-08T17:00:02Z","level":"DEBUG","message":"config loaded","service":"api"}
+{"timestamp":"2026-08-08T17:00:03Z","level":"INFO","message":"request received","service":"api","path":"/health"}
+{"timestamp":"2026-08-08T17:00:03Z","level":"INFO","message":"request completed","service":"api","status":200}
+{"timestamp":"2026-08-08T17:00:04Z","level":"WARN","message":"slow query","service":"db","duration_ms":420}
+{"timestamp":"2026-08-08T17:00:05Z","level":"ERROR","message":"connection refused","service":"db","host":"10.0.0.5"}
+{"timestamp":"2026-08-08T17:00:06Z","level":"INFO","message":"retrying connection","service":"db","attempt":1}
+{"timestamp":"2026-08-08T17:00:07Z","level":"INFO","message":"connection restored","service":"db"}
+{"timestamp":"2026-08-08T17:00:08Z","level":"DEBUG","message":"cache hit","service":"api","key":"user:42"}
+{"timestamp":"2026-08-08T17:00:09Z","level":"DEBUG","message":"cache miss","service":"api","key":"user:99"}
+{"timestamp":"2026-08-08T17:00:10Z","level":"INFO","message":"request received","service":"api","path":"/users/99"}
+{"timestamp":"2026-08-08T17:00:10Z","level":"INFO","message":"request completed","service":"api","status":200}
+{"timestamp":"2026-08-08T17:00:11Z","level":"ERROR","message":"unhandled exception","service":"worker","trace_id":"a1b2c3"}
+{"timestamp":"2026-08-08T17:00:12Z","level":"FATAL","message":"worker crashed, restarting","service":"worker"}
+{"timestamp":"2026-08-08T17:00:13Z","level":"INFO","message":"worker restarted","service":"worker"}
+{"timestamp":"2026-08-08T17:00:14Z","level":"INFO","message":"job processed","service":"worker","job_id":1001}
+{"timestamp":"2026-08-08T17:00:15Z","level":"INFO","message":"job processed","service":"worker","job_id":1002}
+{"timestamp":"2026-08-08T17:00:16Z","level":"WARN","message":"queue depth high","service":"worker","depth":512}
+{"timestamp":"2026-08-08T17:00:17Z","level":"INFO","message":"shutdown requested","service":"api"}

@@ -1,0 +1,5 @@
+level=info msg="request handled" service=api region=us-east customer_tier=gold
+level=info msg="request handled" service=api region=us-west customer_tier=silver
+level=warn msg="retrying upstream call" service=payments region=us-east customer_tier=gold attempt=2
+level=error msg="payment declined" service=payments region=eu-central customer_tier=bronze
+level=info msg="request handled" service=api region=us-east customer_tier=silver

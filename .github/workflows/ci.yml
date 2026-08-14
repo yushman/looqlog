@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
+
+  # packaging spec, "Node-less build": cargo build/install must not need a JS
+  # toolchain. This job never installs Node/npm/wasm-pack — only the committed
+  # assets/ (ADR-0008) are used.
+  build-no-node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - run: cargo package --list -p looq
+
+  # ADR-0005: looq-core must stay usable by a future native (MCP) adapter as well
+  # as the wasm adapter, so it must never depend on wasm-bindgen/web-sys, and must
+  # never touch the filesystem itself (log-parsing-core task 2.4).
+  adr-0005-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: looq-core must not depend on wasm-bindgen or web-sys
+        run: |
+          if cargo tree -p looq-core -i wasm-bindgen 2>/dev/null; then
+            echo "::error::looq-core depends on wasm-bindgen, violating ADR-0005"
+            exit 1
+          fi
+          if cargo tree -p looq-core -i web-sys 2>/dev/null; then
+            echo "::error::looq-core depends on web-sys, violating ADR-0005"
+            exit 1
+          fi
+      - name: looq-core's library source must not touch std::fs
+        run: |
+          if grep -rn "std::fs::" crates/looq-core/src/; then
+            echo "::error::crates/looq-core/src/ touches std::fs, violating ADR-0005"
+            exit 1
+          fi
+
+  # packaging spec, "Vendored artifacts are verifiably current": rebuild
+  # assets/ from source and fail if the committed copy has drifted (ADR-0008 D2).
+  frontend-artifact-staleness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install wasm-pack
+        run: npm install -g wasm-pack
+      - name: Rebuild frontend artifacts
+        run: ./scripts/build-frontend.sh
+      - name: Fail if crates/looq/assets/ drifted from source
+        run: |
+          if ! git diff --quiet -- crates/looq/assets/; then
+            echo "::error::crates/looq/assets/ is stale — committed frontend artifacts do not match a fresh build."
+            echo "Run ./scripts/build-frontend.sh and commit the result."
+            git diff --stat -- crates/looq/assets/
+            exit 1
+          fi
+
+  # app-shell / wasm-bridge specs: strict TypeScript build and type check, wired
+  # into CI so a type error blocks the build (browser-app-shell task 1.2).
+  frontend-typecheck-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - working-directory: web
+        run: npm ci
+      - working-directory: web
+        run: npm run typecheck
+      - working-directory: web
+        run: npm run build
+
+  # wasm-bridge spec, "Type check catches a shape change" (task 2.2): a deliberate
+  # field rename in the hand-written TS mirror, with a usage site left stale,
+  # proves `tsc --noEmit` actually fails instead of silently compiling. See
+  # web/scripts/verify-rename-check.sh for what this does and does not prove.
+  frontend-type-check-catches-rename:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - working-directory: web
+        run: npm ci
+      - working-directory: web
+        run: bash scripts/verify-rename-check.sh

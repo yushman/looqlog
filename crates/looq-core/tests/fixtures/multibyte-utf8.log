@@ -1,0 +1,3 @@
+level=info msg="привет мир" service=api
+level=info msg="emoji test 🚀 rocket" service=api
+level=info msg="plain ascii line" service=api

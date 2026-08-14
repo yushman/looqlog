@@ -1,0 +1,3 @@
+level=info msg="first line ascii only" service=api
+level=info msg="Café latte served" service=api
+level=info msg="third line ascii only" service=api

@@ -1,0 +1,36 @@
+[package]
+name = "looq-wasm"
+description = "wasm-bindgen adapter exposing looq-core to the browser (ADR-0005)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+looq-core = { path = "../looq-core" }
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+# release-hardening: rustc 1.95's wasm32-unknown-unknown codegen emits
+# bulk-memory (`memory.copy`/`memory.fill`), sign-extension, mutable-globals and
+# nontrapping-float-to-int instructions by default; `wasm-pack`'s plain `wasm-opt
+# -O` invocation doesn't enable any of those features on its own, so `wasm-opt`
+# rejected the module outright feature-by-feature as each was hit (first
+# `memory.copy`, then `i32.trunc_sat_f64_s`) — not a regression in this crate's own
+# code (untouched by release-hardening), a toolchain/wasm-pack version mismatch
+# caught while re-verifying the build in this change. Flags below match rustc's
+# current wasm32-unknown-unknown default feature set so `wasm-opt` accepts what
+# rustc actually emits, rather than disabling optimization entirely.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = [
+    "-O",
+    "--enable-bulk-memory-opt",
+    "--enable-sign-ext",
+    "--enable-mutable-globals",
+    "--enable-nontrapping-float-to-int",
+]

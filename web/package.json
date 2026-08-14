@@ -1,0 +1,22 @@
+{
+  "name": "looq-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json",
+    "test": "vitest run",
+    "verify-rename-check": "bash scripts/verify-rename-check.sh"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vite": "8.2.1",
+    "vitest": "4.1.10"
+  },
+  "dependencies": {
+    "comlink": "4.4.2",
+    "uplot": "1.6.32"
+  }
+}

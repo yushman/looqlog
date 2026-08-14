@@ -1,0 +1,10 @@
+{"timestamp":"2026-08-08T17:42:01Z","level":"info","message":"server started","service":"api","port":8080}
+{"timestamp":"2026-08-08T17:42:02Z","level":"debug","message":"config loaded","service":"api","path":"/etc/app.conf"}
+{"timestamp":"2026-08-08T17:42:03Z","level":"warning","message":"slow query detected","service":"db","duration_ms":842}
+{"timestamp":"2026-08-08T17:42:04Z","level":"error","message":"connection refused","service":"api","upstream":"cache"}
+{"timestamp":"2026-08-08T17:42:05Z","level":"info","message":"request completed","service":"api","status":200}
+{"timestamp":"2026-08-08T17:42:06Z","level":"critical","message":"disk full","service":"worker"}
+{"timestamp":"2026-08-08T17:42:07Z","level":"info","message":"job processed","service":"worker","job_id":"j-1"}
+{"timestamp":"2026-08-08T17:42:08Z","level":"trace","message":"cache lookup","service":"cache","key":"session:42"}
+{"timestamp":"2026-08-08T17:42:09Z","level":"info","message":"health check passed","service":"api"}
+{"timestamp":"2026-08-08T17:42:10Z","level":"err","message":"timeout waiting for upstream","service":"api","upstream":"db"}

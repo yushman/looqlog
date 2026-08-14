@@ -1,0 +1,5 @@
+{"level":"info","message":"second event","ts":"2026-08-08T17:42:05Z"}
+{"level":"info","message":"first event, arrived late","ts":"2026-08-08T17:42:01Z"}
+{"level":"info","message":"no timestamp at all"}
+{"level":"info","message":"third event","ts":"2026-08-08T17:42:10Z"}
+{"level":"warn","message":"unparsable timestamp","ts":"yesterday"}

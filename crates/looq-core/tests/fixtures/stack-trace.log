@@ -1,0 +1,5 @@
+2026-08-08T17:42:11Z ERROR unhandled exception in request handler
+java.lang.NullPointerException: Cannot invoke "String.length()" because "s" is null
+	at com.example.app.Handler.process(Handler.java:42)
+	at com.example.app.Handler.handle(Handler.java:17)
+	at com.example.app.Server.dispatch(Server.java:88)
