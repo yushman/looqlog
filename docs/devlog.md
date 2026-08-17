@@ -1730,8 +1730,189 @@ requirement exists precisely *because* the encoded search text and field values 
 log. `openspec validate --specs --strict`: 20 passed, 0 failed. No `TBD - created by archiving`
 strings left anywhere under `openspec/specs/`.
 
+## 2026-08-17 — `frontend-three-pane-layout`: the log fills the window, and filters survive a stream
+
+The page stopped being one vertical stack. `looq-workspace` now owns a viewport-bound CSS grid —
+topbar row, collapsible full-width timeline row, then rail / table / detail across the bottom — and
+both shells (`looq-app.ts` for file mode, `looq-live-tail.ts` for stdin) mount that one element and
+only fill its panes. The `.entry-table-viewport { height: 480px }` rule is gone; the viewport is a
+flex child with `min-height: 0`, and the virtual scroller picks the new height up from
+`clientHeight` with no code change, exactly as design.md D2 predicted.
+
+**The live-stream click bug, before and after (measured, not argued).** The failure was never in
+the filter code: `renderChips()` reassigned the chip container's `innerHTML` on every live batch, so
+a control was detached between a human's `mousedown` and `mouseup`, and the browser then synthesises
+no `click` at all. Reproduced on the pre-change build (`cargo build -p looq` against the committed
+`crates/looq/assets/`, a ~25 lines/sec producer piped into `looq --port 7801`), by pressing a level
+chip and releasing it 150ms later:
+
+```
+{ stillConnected: false, sameNode: false, clickWouldFire: false,
+  filtersChangeEvents: 0, hashBefore: "", hashAfter: "",
+  summaryBefore: "Showing all 735 of 735 entries.",
+  summaryAfter:  "Showing all 753 of 753 entries." }
+```
+
+After the fix (same producer, same 150ms press, `looq --port 7804`):
+
+```
+{ stillConnected: true, sameNode: true, clickWouldFire: true,
+  filtersChangeEvents: 1, ariaPressed: "true",
+  hashBefore: "", hashAfter: "#filter=level%3DERROR",
+  summaryBefore: "Showing all 713 of 713 entries.",
+  summaryAfter:  "Showing 182 of 731 entries matching the active filters.",
+  rate: "23 lines/sec" }
+```
+
+Playwright's own `browser_click` passed on *both* builds — it presses and releases in well under a
+millisecond, inside the gap between two re-renders. That is why the check here dispatches
+`mousedown`, waits 150ms, and then asks the question the browser asks (is the node still connected,
+is it still under the pointer?) before deciding whether a `click` would fire at all.
+
+The fix is D4's split: a structural pass keyed by `field` + `value` that only runs when the *set* of
+fields or values changes, and a count pass that writes into the count text node of a control that
+stays put. New values are inserted at their ordered position without relocating existing nodes, so
+no control moves under a finger. Consequence, verified over ~25 live batches (2s at 80ms): the
+level control and the high-cardinality field's `<input>` are the same DOM nodes before and after,
+the half-typed `req-0001` and its caret at offset 4 are intact, focus never left the input, and the
+ERROR count went 261 → 273 in place.
+
+`looq-detection` and `looq-diagnostics` had the same latent problem — live mode pushes into them
+every 80ms — so both now keep a persistent `<details>` skeleton and only rewrite content when a
+content key actually changes. That is also what makes their collapsed state honest (D7): the
+summary line carries the state, so collapsing never hides a warning. With `#format=json` forced onto
+a half-broken fixture: summary reads `20 skipped` with warning styling and the section auto-opened
+(`open: true`, `looq-diagnostics.className === "warning"`). On a fallback detection the summary
+reads `fell back to plain text (50%)` and opens itself.
+
+**Measurements (real numbers, exact method).**
+- **50k-entry scroll smoothness, re-measured against `timeline-and-table`'s recorded result** —
+  `./scripts/build-frontend.sh && cargo build -p looq`, then
+  `python3 scripts/gen-timeline-fixture.py 50000 --jitter 5 > .playwright-mcp/fixture-50k.jsonl`
+  opened through the file picker at 1280x800 against the real binary
+  (`run_file_mode.py 7803 …`, a pty on stdin so `mode_for` picks file mode). Same recorder as
+  before: `requestAnimationFrame` frame times around a 2-second programmatic `scrollTop` sweep from
+  0 to `scrollHeight - clientHeight` (= 1,199,610px). **120 frames, avg 16.81ms/frame, max 34.17ms,
+  1 frame over the 33.3ms threshold (0.8%).** The recorded baseline was 123 frames, avg 16.80ms,
+  max 32.86ms, 0 over — i.e. no regression from moving the detail view out and letting the layout
+  set the height. Jump-to-end still rendered ordinals 49998/49999/50000 with no stall (0.0ms for the
+  synchronous `scrollTop` pair), DOM row count 25–33 rows for 50,000 entries.
+- **No page scrollbar at 1280x800 with 50k entries** — `documentElement.scrollHeight === 800 ===
+  clientHeight`, `pageHasScrollbar: false`, first row visible in the initial view, table viewport
+  390px. Same numbers in stdin mode (`docScrollHeight 800`, table viewport 337px, 31 rows).
+- **The table uses the height it is given** — resizing 1280x800 → 1280x1100 took the viewport from
+  390px/16 fully-visible rows to 690px/28, still with no document scrollbar. This needed one new
+  line of behavior: a `resize` listener on `looq-entry-table`, because in file mode nothing else
+  would re-run `renderVisibleRows()` after a resize.
+
+**Other things that had to be got right, and how they were checked.**
+- **URL hash grammar unchanged** (task 7.4). A link produced *before* this change,
+  `#range=1754668800000,1754669400000&filter=level%3DWARN&q=job&format=json`, opened on a fresh
+  load and applied in full: WARN pressed, `q` back in the search box, both range inputs populated as
+  `2025-08-08T16:00:00.000` / `...T16:10:00.000`, 14 of 400 shown, no hash notice. Writing works the
+  other way too — the rail's own range inputs produce `range=1754668800000%2C1754669400000`.
+- **Detail pane by ordinal, not position** (D6). Selecting a row moved zero rows
+  (`rowsMoved: 0`, all bounding boxes identical before/after) — the reflow the old inline panel
+  caused is gone. Under a `--max-lines 2000` stream, a selected ordinal that got evicted turned the
+  pane into "Entry #1 is no longer retained (evicted at `--max-lines`) — its contents are gone, not
+  hidden", rather than describing whatever entry now sits at that index.
+- **Keyboard** (task 7.5). 35 focusable controls, all 10 rail sections focusable, `Enter` on the
+  timeline `<summary>` collapsed it, `Enter` on a focused WARN row toggled the filter
+  (`aria-pressed: true`, hash `#filter=level%3DWARN`, 500 of 2000 shown). Nothing is pointer-only:
+  every value control is a `<button>` and every section header is a `<summary>`.
+- **Narrow window** (D8). At 1000px the grid collapses to one column in rail → table → detail order
+  (all three 1000px wide), every rail section starts closed, and this is the one mode where the
+  document itself is allowed to scroll.
+- **Privacy copy stays per-mode** (TDR §12). The file-mode paragraph moved out of
+  `looq-drop-target` (a component only file mode mounts) into each shell's own rail section, so the
+  stdin shell states the WebSocket guarantee and never the browser-only one.
+
+**Decisions taken inside the implementation, not in design.md:**
+- **The drop target is one element that moves**, from the center pane (nothing opened yet — the
+  `app-shell` "prompts for a file" state) into the rail's collapsed "Open another file" section
+  after the first successful parse. Moving the node keeps its listeners and picker state; a second
+  instance would have been two sources of `file-selected`.
+- **`showResults()` runs before `timelineEl.setIndex()`**, because `uPlot` sizes its canvas from
+  `clientWidth` at draw time and the timeline row is still hidden before that call — the first build
+  drew a 480px-wide chart in a 1256px row and stayed there. Nothing paints between the two calls, so
+  this is not a flash of an unfiltered view.
+- **Section `open` state is written exactly once, at creation.** Writing it on update would let a
+  live batch reopen a drawer the user just closed. It is deliberately not in the URL hash: the hash
+  describes the query, not furniture.
+
+**Tests:** `cargo test --workspace` 103 passed / 0 failed, `npm run test` 55/55, `npm run typecheck`
+clean, `cargo fmt --all -- --check` clean, `cargo clippy --workspace --all-targets -- -D warnings`
+clean. One caveat worth recording: `fast_producer_slow_consumer_never_blocks_and_reports_an_accurate_gap`
+failed once while three `looq` servers and two producers were saturating this machine, and passed
+5/5 in isolation and in every run after the load was gone — a timing-sensitive backpressure test, no
+Rust code was touched by this change.
+
+**Bundle:** `index.js` 121.81KB / **42.45KB gzipped** (was 87.72KB / 34.01KB), `index.css` 14.83KB /
+3.66KB gzipped, `worker.js` unchanged at 4.86KB. Main-bundle gzip total **46.11KB**, about 23% of
+TDR §5's 200KB budget. `crates/looq/assets/` rebuilt via `./scripts/build-frontend.sh` and verified
+byte-identical across two consecutive runs (same md5 for `index.js`/`index.css`), so CI's
+`frontend-artifact-staleness` job has nothing to complain about.
+
+**README:** no behavioral change — install steps, commands, flags, output and limitations are all
+untouched — but one paragraph in each README described the filter controls as "a row of chips",
+which is no longer what a user sees. `README.md` and `README.ru.md` were updated together in the
+same edit ("its own collapsible section in the left rail" / "своя сворачиваемая секция" in the left
+panel); nothing else in either file describes the page layout.
+
+**Two defects found while reviewing the implementation, fixed inside the same change (tasks 9.1–9.6)
+rather than deferred.** Both come from the entry table's column widths (`3.5rem 14rem 6rem 1fr`)
+being inherited unchanged from a full-width table into a narrower centre pane:
+
+- The timestamp column overflowed and ran under the level badge whenever timestamps carry
+  milliseconds — visible in stdin mode, invisible in the file fixtures used during implementation.
+  Measured before: `scrollWidth 237` against `clientWidth 224` for
+  `2026-08-17T10:00:01.600+00:00`. Columns are now `3rem 15.5rem 2.5rem minmax(0, 1fr)`, and
+  `.col-timestamp` gained the `overflow: hidden` / `text-overflow: ellipsis` treatment `.col-message`
+  already had, so a nanosecond-precision timestamp truncates rather than colliding. Row grids are
+  per-row, so content-based column sizing is not available here — rows would stop lining up with each
+  other; fixed widths plus clipping is the only arrangement that holds.
+- The message column — the actual log content — was the narrowest column at 212px, while the level
+  column held 6rem for a 1.6em badge. After: message 252px, level 40px, nothing overflowing in either
+  mode (worst-case timestamp overflow measured at 0px across all rendered rows in a live stream).
+
+The timeline's vertical budget was trimmed in the same pass: its summary line, outlier note and range
+controls now share one flex row instead of stacking, and the chart is 110px rather than 140px
+(`CHART_HEIGHT` in `looq-timeline.ts` and the CSS `min-height` both — uPlot sizes itself from the
+constant, so the CSS alone could not shrink it). First entry row at 1280×800 moved from y=401 to
+y=334; the table viewport went from 390px to 457px, 33 rows to 36.
+
+Then the timestamp column itself (tasks 9.7–9.8): rows now drop the `+00:00` suffix, because
+`Entry::timestamp` is a `DateTime<Utc>` in `looq-core` — every value the parser emits carries the
+same six redundant characters, and the column header already says UTC. The strip is deliberately
+narrow (`/(\+00:00|Z)$/`): any other offset would stay on screen rather than being silently dropped
+if the core's type ever changes, and the full RFC 3339 string stays reachable as the cell's `title`
+and in the detail pane, so nothing is actually lost. The column went 15.5rem → 12.5rem and the
+message column took the difference.
+
+Final widths at 1280×800: timestamp 200px showing `2025-08-08T15:59:55`, message **300px** — up from
+the 212px it started this change with, a 42% gain for the one column that holds the log. Live mode
+with millisecond timestamps (`2026-08-17T10:05:27.200`, the longest form in practice) measured 0px
+overflow across every rendered row.
+
+Re-verified after the fix: no page scrollbar in either mode, `cargo test --workspace` 103/0,
+`npm run test` 55/55, `npm run typecheck` clean, assets byte-identical across two rebuilds.
+
+**Tooling note:** `openspec update` was run this session; it installed `opsx:ff`, `opsx:verify`,
+`opsx:sync` and `opsx:bulk-archive` as real commands. `CLAUDE.md`'s flow section now names
+`opsx:explore → opsx:ff → opsx:apply → opsx:archive` directly instead of describing "ff" as a manual
+one-pass write, and records that a defect found while verifying an unarchived change is fixed inside
+that change rather than spun out as a follow-up proposal.
+
 ## Ideas for later
 
+- Give `looq-detection`'s collapsed summary something better than "detecting…" when a `#format=`
+  override skipped detection entirely (`crates/looq-wasm/src/lib.rs`: detection is `null` in that
+  case). Pre-existing — the old panel said "Detecting format..." forever too — but a summary line
+  that is now the *only* thing visible when collapsed makes it more noticeable.
+- Resizable rail/detail panes, deliberately deferred by `frontend-three-pane-layout`'s Non-Goals
+  rather than half-built; the widths are fixed at 18rem/22rem today.
+- Re-render the timeline on window resize (its `uPlot` canvas width is chosen once, at draw time),
+  now that the layout is width-responsive; out of scope for the change that introduced the layout.
 - A disk-backed or larger in-page benchmark harness (median/stddev over many runs,
   automated regression check) belongs with `log-parsing-core`, once there's a real
   parser worth protecting from regressions.
