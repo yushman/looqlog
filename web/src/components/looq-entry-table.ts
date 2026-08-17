@@ -251,8 +251,14 @@ export class LooqEntryTable extends HTMLElement {
     const timestampHtml = entry.timestamp
       ? escapeHtml(entry.timestamp)
       : `<span class="absent" title="no timestamp extracted">no timestamp</span>`;
+    // Visible text is compressed to the level's first letter (all six of
+    // TRACE/DEBUG/INFO/WARN/ERROR/FATAL are already unique on that letter); the
+    // full word stays available via `aria-label` (assistive tech) and `title`
+    // (hover tooltip) so the abbreviation is a visual compression, not an
+    // information loss (`entry-table` spec, "Abbreviated level still exposes its
+    // full name").
     const levelHtml = entry.level
-      ? `<span class="level-badge level-${escapeHtml(entry.level.toLowerCase())}">${escapeHtml(entry.level)}</span>`
+      ? `<span class="level-badge level-${escapeHtml(entry.level.toLowerCase())}" aria-label="${escapeHtml(entry.level)}" title="${escapeHtml(entry.level)}">${escapeHtml(entry.level[0]!)}</span>`
       : `<span class="absent" title="no level extracted">no level</span>`;
     const truncated = entry.message.length > MESSAGE_TRUNCATE_CHARS;
     const messageShown = truncated ? `${entry.message.slice(0, MESSAGE_TRUNCATE_CHARS)}…` : entry.message;

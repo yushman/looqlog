@@ -3,12 +3,21 @@
    (the "Auto" case) and `[data-theme="dark"]` (the explicit override, which must win
    over the system preference either direction — see web/src/theme.ts). No element's
    color/background is ever hardcoded outside these two blocks. No external
-   fonts/stylesheets/images anywhere in this file — `system-ui`/`ui-monospace` are
-   locally-installed system font stacks, not network fetches, so both appearances
-   render fully with the network disabled. */
+   fonts/stylesheets/images anywhere in this file — `--font-mono` (below) is a
+   preference order over locally-installed system fonts, not a network fetch, so
+   both appearances render fully with the network disabled. */
 
 :root {
   color-scheme: light dark;
+
+  /* Font stack, not a color — one declaration, not duplicated per appearance
+     block (`frontend-terminal-overhaul` design.md D1). `ui-monospace` stays
+     first: it's the browser's own "system default monospace" keyword and
+     already resolves well; the named fonts after it only matter on browsers
+     that don't support it, or when the user has one of them installed and
+     `ui-monospace`'s resolution doesn't already surface it. */
+  --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
 
   --bg: #ffffff;
   --fg: #1a1a1a;
@@ -31,60 +40,105 @@
   --success: #15803d;
 
   --hl-bg: rgba(250, 204, 21, 0.55);
+
+  --bg-elevated: #f7f7f8;
+
+  --level-trace: #5b5f66;
+  --level-trace-bg: rgba(91, 95, 102, 0.12);
+  --level-debug: #2f6fed;
+  --level-debug-bg: rgba(47, 111, 237, 0.12);
+  --level-info: #15803d;
+  --level-info-bg: rgba(21, 128, 61, 0.12);
+  --level-warn: #a35a00;
+  --level-warn-bg: rgba(163, 90, 0, 0.16);
+  --level-error: #c22a31;
+  --level-error-bg: rgba(194, 42, 49, 0.12);
+  --level-fatal: #7c3aed;
+  --level-fatal-bg: rgba(124, 58, 237, 0.12);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #121212;
+    --bg: #0b0c0f;
     --fg: #e9e9e9;
     --muted: #a8abb3;
-    --border: rgba(255, 255, 255, 0.22);
-    --code-bg: rgba(255, 255, 255, 0.1);
+    --border: rgba(255, 255, 255, 0.13);
+    --code-bg: rgba(255, 255, 255, 0.06);
 
-    --accent: #7aa8ff;
+    --accent: #6e8bff;
     --accent-fg: #bcd2ff;
-    --accent-bg: rgba(122, 168, 255, 0.2);
+    --accent-bg: rgba(110, 139, 255, 0.2);
 
-    --error: #ff8a80;
+    --error: #f0525a;
     --error-fg: #1a1a1a;
-    --error-bg: rgba(255, 138, 128, 0.18);
+    --error-bg: rgba(240, 82, 90, 0.18);
 
-    --warn: #ffca7a;
+    --warn: #f5a742;
     --warn-fg: #1a1a1a;
-    --warn-bg: rgba(255, 202, 122, 0.2);
+    --warn-bg: rgba(245, 167, 66, 0.2);
 
     --success: #6fe08a;
 
     --hl-bg: rgba(250, 204, 21, 0.45);
+
+    --bg-elevated: #131417;
+
+    --level-trace: #7d818a;
+    --level-trace-bg: rgba(125, 129, 138, 0.2);
+    --level-debug: #5b8cff;
+    --level-debug-bg: rgba(91, 140, 255, 0.2);
+    --level-info: #4ade80;
+    --level-info-bg: rgba(74, 222, 128, 0.2);
+    --level-warn: #f5a742;
+    --level-warn-bg: rgba(245, 167, 66, 0.2);
+    --level-error: #f0525a;
+    --level-error-bg: rgba(240, 82, 90, 0.18);
+    --level-fatal: #c084fc;
+    --level-fatal-bg: rgba(192, 132, 252, 0.2);
   }
 }
 
 :root[data-theme="dark"] {
-  --bg: #121212;
+  --bg: #0b0c0f;
   --fg: #e9e9e9;
   --muted: #a8abb3;
-  --border: rgba(255, 255, 255, 0.22);
-  --code-bg: rgba(255, 255, 255, 0.1);
+  --border: rgba(255, 255, 255, 0.13);
+  --code-bg: rgba(255, 255, 255, 0.06);
 
-  --accent: #7aa8ff;
+  --accent: #6e8bff;
   --accent-fg: #bcd2ff;
-  --accent-bg: rgba(122, 168, 255, 0.2);
+  --accent-bg: rgba(110, 139, 255, 0.2);
 
-  --error: #ff8a80;
+  --error: #f0525a;
   --error-fg: #1a1a1a;
-  --error-bg: rgba(255, 138, 128, 0.18);
+  --error-bg: rgba(240, 82, 90, 0.18);
 
-  --warn: #ffca7a;
+  --warn: #f5a742;
   --warn-fg: #1a1a1a;
-  --warn-bg: rgba(255, 202, 122, 0.2);
+  --warn-bg: rgba(245, 167, 66, 0.2);
 
   --success: #6fe08a;
 
   --hl-bg: rgba(250, 204, 21, 0.45);
+
+  --bg-elevated: #131417;
+
+  --level-trace: #7d818a;
+  --level-trace-bg: rgba(125, 129, 138, 0.2);
+  --level-debug: #5b8cff;
+  --level-debug-bg: rgba(91, 140, 255, 0.2);
+  --level-info: #4ade80;
+  --level-info-bg: rgba(74, 222, 128, 0.2);
+  --level-warn: #f5a742;
+  --level-warn-bg: rgba(245, 167, 66, 0.2);
+  --level-error: #f0525a;
+  --level-error-bg: rgba(240, 82, 90, 0.18);
+  --level-fatal: #c084fc;
+  --level-fatal-bg: rgba(192, 132, 252, 0.2);
 }
 
 body {
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: var(--font-mono);
   max-width: 900px;
   margin: 2rem auto;
   padding: 0 1rem;
@@ -98,6 +152,17 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-elevated);
+  border-bottom: 2px solid var(--accent);
+}
+
+.brand-mark {
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  margin-right: 0.4em;
+  background: var(--accent);
 }
 
 h1 {
@@ -107,7 +172,7 @@ h1 {
 .theme-toggle {
   font-size: 0.85em;
   padding: 0.3em 0.7em;
-  border-radius: 6px;
+  border-radius: 5px;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--fg);
@@ -133,7 +198,7 @@ code {
 
 .drop-zone {
   border: 2px dashed var(--muted);
-  border-radius: 8px;
+  border-radius: 5px;
   padding: 3rem 1rem;
   text-align: center;
   margin-top: 1rem;
@@ -145,7 +210,6 @@ code {
 }
 
 .status {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: pre-wrap;
 }
 
@@ -179,8 +243,8 @@ code {
   justify-content: space-between;
   gap: 1em;
   margin: 0.75rem 0;
-  padding: 0.6em 0.9em;
-  border-radius: 6px;
+  padding: 0.5em 0.75em;
+  border-radius: 5px;
   background: var(--error-bg);
   border: 1px solid var(--error);
   color: var(--error);
@@ -204,8 +268,8 @@ code {
   flex-wrap: wrap;
   gap: 0.75em;
   margin: 0.75rem 0;
-  padding: 0.6em 0.9em;
-  border-radius: 6px;
+  padding: 0.5em 0.75em;
+  border-radius: 5px;
   background: var(--warn-bg);
   border: 1px solid var(--warn);
   color: var(--warn);
@@ -235,7 +299,6 @@ looq-diagnostics .diagnostics.warning {
 
 .diagnostics-counts,
 .diagnostics-examples {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.9em;
 }
 
@@ -260,15 +323,14 @@ looq-diagnostics .diagnostics.warning {
 
 .conn-indicator {
   font-weight: bold;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   padding: 0.15em 0.6em;
   border-radius: 999px;
   font-size: 0.85em;
 }
 
 .conn-indicator.conn-live {
-  color: #fff;
-  background: #16a34a;
+  color: var(--level-info);
+  background: var(--level-info-bg);
 }
 
 .conn-indicator.conn-connecting {
@@ -282,12 +344,11 @@ looq-diagnostics .diagnostics.warning {
 }
 
 .conn-indicator.conn-disconnected {
-  color: #fff;
-  background: #b91c1c;
+  color: var(--level-error);
+  background: var(--level-error-bg);
 }
 
 .lines-per-sec {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
   color: var(--muted);
 }
@@ -313,9 +374,9 @@ looq-diagnostics .diagnostics.warning {
 
 .filter-bar {
   margin: 0.75rem 0;
-  padding: 0.5rem 0.75rem;
+  padding: 0.4rem 0.6rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 5px;
 }
 
 .filter-rule-note {
@@ -342,11 +403,13 @@ looq-diagnostics .diagnostics.warning {
   font-size: 0.85em;
   color: var(--muted);
   min-width: 5em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .filter-chip {
   font-size: 0.85em;
-  padding: 0.15em 0.6em;
+  padding: 0.12em 0.5em;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: transparent;
@@ -432,7 +495,6 @@ looq-diagnostics .diagnostics.warning {
 /* ---- looq-timeline ------------------------------------------------------- */
 
 .timeline-summary {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
   color: var(--muted);
 }
@@ -458,7 +520,6 @@ looq-diagnostics .diagnostics.warning {
 /* ---- looq-entry-table ------------------------------------------------------ */
 
 .entry-table-summary {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
   color: var(--muted);
 }
@@ -499,7 +560,6 @@ looq-diagnostics .diagnostics.warning {
 }
 
 .entry-row {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
   padding: 0 0.5em;
   cursor: pointer;
@@ -530,33 +590,45 @@ looq-diagnostics .diagnostics.warning {
 }
 
 .level-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6em;
+  height: 1.6em;
+  border-radius: 50%;
   font-weight: bold;
-  padding: 0 0.4em;
-  border-radius: 3px;
 }
 
-.level-badge.level-error,
+.level-badge.level-error {
+  background: var(--level-error-bg);
+  color: var(--level-error);
+}
+
 .level-badge.level-fatal,
 .level-badge.level-critical {
-  background: var(--error-bg);
-  color: var(--error);
+  background: var(--level-fatal-bg);
+  color: var(--level-fatal);
 }
 
 .level-badge.level-warn,
 .level-badge.level-warning {
-  background: var(--warn-bg);
-  color: var(--warn);
+  background: var(--level-warn-bg);
+  color: var(--level-warn);
 }
 
 .level-badge.level-info {
-  background: var(--accent-bg);
-  color: var(--accent-fg);
+  background: var(--level-info-bg);
+  color: var(--level-info);
 }
 
-.level-badge.level-debug,
+.level-badge.level-debug {
+  background: var(--level-debug-bg);
+  color: var(--level-debug);
+}
+
 .level-badge.level-trace {
-  background: var(--code-bg);
-  color: var(--muted);
+  background: var(--level-trace-bg);
+  color: var(--level-trace);
 }
 
 .eviction-banner {
@@ -565,9 +637,9 @@ looq-diagnostics .diagnostics.warning {
 
 .entry-detail-panel {
   margin-top: 0.75rem;
-  padding: 0.75rem;
+  padding: 0.6rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 5px;
   font-size: 0.9em;
 }
 
@@ -589,7 +661,6 @@ looq-diagnostics .diagnostics.warning {
 
 .detail-core dd {
   margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .detail-message-label,
@@ -602,7 +673,11 @@ looq-diagnostics .diagnostics.warning {
 .detail-message {
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* `<pre>` carries its own UA-stylesheet `font-family: monospace` default,
+     which is a direct rule (not inheritance) and would otherwise win over
+     `body`'s `--font-mono` now that this rule's own explicit declaration is
+     gone — found via computed-style verification (task 1.3), not assumed. */
+  font-family: var(--font-mono);
   background: var(--code-bg);
   padding: 0.5em;
   border-radius: 4px;
@@ -612,7 +687,6 @@ looq-diagnostics .diagnostics.warning {
 .detail-fields {
   border-collapse: collapse;
   width: 100%;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.9em;
 }
 

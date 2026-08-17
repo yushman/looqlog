@@ -37,6 +37,19 @@ function formatSpanLabel(ms: number): string {
   return `${new Date(ms).toISOString().replace("T", " ").replace("Z", " UTC")}`;
 }
 
+/** `--accent` is a plain `#rrggbb` hex token; the filtered-series fill/stroke need
+ * an alpha channel uPlot's canvas paths use directly, so convert rather than
+ * hardcoding a second, alpha-bearing copy of the color in this file. */
+function hexToRgba(hex: string, alpha: number): string {
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) {
+    return hex; // malformed token: fall back to the raw value rather than throwing
+  }
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 export class LooqTimeline extends HTMLElement {
   private index: EntryIndex | null = null;
   private plot: uPlot | null = null;
@@ -178,6 +191,10 @@ export class LooqTimeline extends HTMLElement {
   private drawPlot(data: uPlot.AlignedData, bucketWidthMs: number): void {
     this.destroyPlot();
     const width = Math.max(this.chartEl.clientWidth || MIN_CHART_WIDTH, MIN_CHART_WIDTH);
+    // Read the accent color from the token at render time rather than hardcoding
+    // its hex, so a future palette change (`theming` spec) doesn't require an edit
+    // here too (design.md D4).
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#6e8bff";
     const opts: uPlot.Options = {
       width,
       height: CHART_HEIGHT,
@@ -196,15 +213,21 @@ export class LooqTimeline extends HTMLElement {
           // than "no data exists here".
           label: "all entries",
           paths: uPlot.paths.bars!({ size: [0.9, 100] }),
-          fill: "rgba(148, 163, 184, 0.45)",
+          // D4: dropped from 0.45 so the unfiltered background reads as context,
+          // not a competing series, against the new darker #0b0c0f background.
+          fill: "rgba(148, 163, 184, 0.25)",
           stroke: "rgba(100, 116, 139, 0.6)",
           width: 1,
         },
         {
           label: "matching filters",
           paths: uPlot.paths.bars!({ size: [0.9, 100] }),
-          fill: "rgba(37, 99, 235, 0.55)",
-          stroke: "rgba(37, 99, 235, 0.9)",
+          // D4: switched from a hardcoded blue to the `--accent` token so palette
+          // changes propagate here automatically; 0.6/0.9 chosen by visual check
+          // against #0b0c0f (docs/devlog.md) — comparable-or-higher prominence
+          // than the old hardcoded blue while reading calmer/more monochrome.
+          fill: hexToRgba(accent, 0.6),
+          stroke: hexToRgba(accent, 0.9),
           width: 1,
         },
       ],
