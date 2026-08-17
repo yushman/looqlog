@@ -26,8 +26,15 @@ fn to_js<T: serde::Serialize + ?Sized>(value: &T) -> Result<JsValue, JsValue> {
     // FieldInventory::fields, FieldStats::values, the diagnostics counts map) cross
     // as plain JS objects (`Record<string, T>` on the TS side) rather than `Map`,
     // which is what `web/src/wasm-types.ts` and every consumer assume.
+    // `serialize_missing_as_null(true)`: `Option::None` fields (`Entry::level`,
+    // `Entry::timestamp`) must cross as JS `null`, matching the `string | null`
+    // contract in `wasm-types.ts` — the default `undefined` reaches consumers that
+    // check `=== null` (entry-index.ts) or feed straight into `escapeHtml`
+    // (looq-filter-bar.ts's chip rendering), crashing the tab on any entry with no
+    // level extracted.
     let serializer = serde_wasm_bindgen::Serializer::new()
         .serialize_maps_as_objects(true)
+        .serialize_missing_as_null(true)
         .serialize_large_number_types_as_bigints(false);
     value
         .serialize(&serializer)
