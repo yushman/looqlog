@@ -1903,6 +1903,46 @@ Re-verified after the fix: no page scrollbar in either mode, `cargo test --works
 one-pass write, and records that a defect found while verifying an unarchived change is fixed inside
 that change rather than spun out as a follow-up proposal.
 
+## 2026-08-17 — the same detach-under-the-pointer bug, one layer down: entry rows
+
+Ran the finished build against a live stream to look at it, and selecting a row did nothing — the
+detail pane stayed on "Select an entry to inspect". Not a detail-pane bug: `renderVisibleRows()`
+still did `this.rowsEl.innerHTML = html.join("")` on every render, exactly the pattern
+`frontend-three-pane-layout` removed from the filter rail and did not think to look for in the table.
+Under a stream the row you press is detached before you release, no `click` is synthesised, and the
+selection never happens. Measured before the fix: `stillConnected: false` 150ms after `mousedown`.
+
+**Fix:** rows are reused instead of rebuilt. `rowsEl` keeps a pool of row elements; each render
+grows or shrinks the pool, then writes into a row **only when its content key changed** — the key
+being `ordinal | selected | query`, i.e. everything the rendered output depends on. A row showing the
+same entry is left completely untouched, so the node under the pointer survives. The row markup moved
+out of the class into `createRowElement()` + `renderRowCellsHtml(entry, compiled)`, and
+`compiledQueryKey()` turns the compiled query into the key's third component.
+
+After: pressing a row inside a live stream and releasing 150ms later fires the click and fills the
+pane (`ordinal 484`, `2026-08-17T10:06:27.200`), while `LIVE` keeps ticking.
+
+**Two things worth writing down about the verification itself**, because both nearly produced a wrong
+conclusion:
+
+- The first probe reported `clickWouldFire: false` even after the fix. The cause was the probe, not
+  the app: it grabbed `.entry-row[4]`, which is an *overscan* row sitting above the viewport's top
+  edge, clipped out of view — `elementFromPoint` at those coordinates returns the toolbar overlaying
+  that area. Picking a row whose rect is genuinely inside the viewport rect is what makes the
+  measurement mean anything.
+- Following the tail is a different case from paused, and only paused is really fixable: while
+  autoscroll is on, rows move under the pointer by design. The fix targets the case a user actually
+  clicks in — stopped, looking at something specific.
+
+Tests after the fix: `npm run test` 55/55, `npm run typecheck` clean, `cargo test --workspace`
+103/0, assets byte-identical across two rebuilds.
+
+**Open question for the spec:** `filtering` now carries "Filter controls stay operable while entries
+arrive", added by `frontend-three-pane-layout`. `entry-table` has no equivalent requirement for row
+selection, which is why the same defect could ship in the same change that fixed it next door. The
+guarantee belongs in `entry-table` too — not written yet, pending a decision on whether to amend the
+accepted spec directly or run a small change for it.
+
 ## Ideas for later
 
 - Give `looq-detection`'s collapsed summary something better than "detecting…" when a `#format=`

@@ -255,40 +255,33 @@ export class LooqEntryTable extends HTMLElement {
     this.spacerEl.style.height = `${total * ROW_HEIGHT}px`;
     this.rowsEl.style.transform = `translateY(${firstIdx * ROW_HEIGHT}px)`;
 
-    const html: string[] = [];
-    for (let i = firstIdx; i < lastIdxExclusive; i++) {
-      html.push(this.renderRowHtml(this.displayed[i]!)); // i < lastIdxExclusive <= total
+    // Rows are reused, not rebuilt. Replacing `rowsEl.innerHTML` on every render
+    // detached whatever the user was pressing on: under a live stream the row went
+    // away between mousedown and mouseup, the browser never synthesised a `click`,
+    // and selecting an entry silently did nothing (the same failure the filter rail
+    // had). A row whose content key is unchanged is left completely untouched, so
+    // the node under the pointer survives the update.
+    const count = lastIdxExclusive - firstIdx;
+    while (this.rowsEl.children.length > count) {
+      this.rowsEl.lastElementChild!.remove();
     }
-    this.rowsEl.innerHTML = html.join("");
-  }
-
-  private renderRowHtml(entry: EntryDto): string {
-    const timestampHtml = entry.timestamp
-      ? `<span title="${escapeHtml(entry.timestamp)}">${escapeHtml(rowTimestamp(entry.timestamp))}</span>`
-      : `<span class="absent" title="no timestamp extracted">no timestamp</span>`;
-    // Visible text is compressed to the level's first letter (all six of
-    // TRACE/DEBUG/INFO/WARN/ERROR/FATAL are already unique on that letter); the
-    // full word stays available via `aria-label` (assistive tech) and `title`
-    // (hover tooltip) so the abbreviation is a visual compression, not an
-    // information loss (`entry-table` spec, "Abbreviated level still exposes its
-    // full name").
-    const levelHtml = entry.level
-      ? `<span class="level-badge level-${escapeHtml(entry.level.toLowerCase())}" aria-label="${escapeHtml(entry.level)}" title="${escapeHtml(entry.level)}">${escapeHtml(entry.level[0]!)}</span>`
-      : `<span class="absent" title="no level extracted">no level</span>`;
-    const truncated = entry.message.length > MESSAGE_TRUNCATE_CHARS;
-    const messageShown = truncated ? `${entry.message.slice(0, MESSAGE_TRUNCATE_CHARS)}…` : entry.message;
-    const selected = entry.ordinal === this.selectedOrdinal;
-    // Highlighting runs on the truncated text (`search` spec: "within the
-    // truncated visible text") so ranges line up with what's actually rendered.
-    const messageHtml = highlightHtml(messageShown, this.compiledQuery);
-    return `
-      <div class="entry-row${selected ? " selected" : ""}" role="row" data-ordinal="${entry.ordinal}"
-           style="height:${ROW_HEIGHT}px">
-        <span class="col-ordinal">${entry.ordinal}</span>
-        <span class="col-timestamp">${timestampHtml}</span>
-        <span class="col-level">${levelHtml}</span>
-        <span class="col-message" title="${truncated ? "truncated — click the row for the full message" : ""}">${messageHtml}</span>
-      </div>`;
+    while (this.rowsEl.children.length < count) {
+      this.rowsEl.appendChild(createRowElement());
+    }
+    const queryKey = compiledQueryKey(this.compiledQuery);
+    for (let j = 0; j < count; j++) {
+      const entry = this.displayed[firstIdx + j]!; // firstIdx + j < lastIdxExclusive <= total
+      const el = this.rowsEl.children[j] as HTMLElement;
+      const selected = entry.ordinal === this.selectedOrdinal;
+      const key = `${entry.ordinal}|${selected ? 1 : 0}|${queryKey}`;
+      if (el.dataset.key === key) {
+        continue;
+      }
+      el.dataset.key = key;
+      el.dataset.ordinal = String(entry.ordinal);
+      el.classList.toggle("selected", selected);
+      el.innerHTML = renderRowCellsHtml(entry, this.compiledQuery);
+    }
   }
 
   private handleRowClick(event: Event): void {
@@ -301,6 +294,56 @@ export class LooqEntryTable extends HTMLElement {
     this.renderVisibleRows(); // to toggle the `.selected` class
     this.emitSelection();
   }
+}
+
+/** An empty row shell, built once and then reused across renders (see
+ * `renderVisibleRows`). Only its cells are rewritten, and only when the entry it
+ * shows actually changes. */
+function createRowElement(): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "entry-row";
+  el.setAttribute("role", "row");
+  el.style.height = `${ROW_HEIGHT}px`;
+  return el;
+}
+
+/** Identifies what a row's cells were rendered from: the entry, whether it is
+ * selected, and the query the highlighting came from. Equal keys mean the rendered
+ * output would be identical, so the row can be left alone. */
+function compiledQueryKey(compiled: CompiledQuery): string {
+  switch (compiled.kind) {
+    case "none":
+      return "none";
+    case "substring":
+      return `sub:${compiled.needle}`;
+    case "regex":
+      return `re:${compiled.source}`;
+  }
+}
+
+function renderRowCellsHtml(entry: EntryDto, compiled: CompiledQuery): string {
+  const timestampHtml = entry.timestamp
+    ? `<span title="${escapeHtml(entry.timestamp)}">${escapeHtml(rowTimestamp(entry.timestamp))}</span>`
+    : `<span class="absent" title="no timestamp extracted">no timestamp</span>`;
+  // Visible text is compressed to the level's first letter (all six of
+  // TRACE/DEBUG/INFO/WARN/ERROR/FATAL are already unique on that letter); the
+  // full word stays available via `aria-label` (assistive tech) and `title`
+  // (hover tooltip) so the abbreviation is a visual compression, not an
+  // information loss (`entry-table` spec, "Abbreviated level still exposes its
+  // full name").
+  const levelHtml = entry.level
+    ? `<span class="level-badge level-${escapeHtml(entry.level.toLowerCase())}" aria-label="${escapeHtml(entry.level)}" title="${escapeHtml(entry.level)}">${escapeHtml(entry.level[0]!)}</span>`
+    : `<span class="absent" title="no level extracted">no level</span>`;
+  const truncated = entry.message.length > MESSAGE_TRUNCATE_CHARS;
+  const messageShown = truncated ? `${entry.message.slice(0, MESSAGE_TRUNCATE_CHARS)}…` : entry.message;
+  // Highlighting runs on the truncated text (`search` spec: "within the
+  // truncated visible text") so ranges line up with what's actually rendered.
+  const messageHtml = highlightHtml(messageShown, compiled);
+  return `
+        <span class="col-ordinal">${entry.ordinal}</span>
+        <span class="col-timestamp">${timestampHtml}</span>
+        <span class="col-level">${levelHtml}</span>
+        <span class="col-message" title="${truncated ? "truncated — click the row for the full message" : ""}">${messageHtml}</span>`;
 }
 
 /** First index in `displayed` (sorted ascending by ordinal — input order, D2)
