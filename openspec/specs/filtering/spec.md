@@ -1,7 +1,14 @@
 # filtering Specification
 
 ## Purpose
-TBD - created by archiving change filtering-and-search. Update Purpose after archive.
+
+The `filtering` capability covers the field filter chips and the one predicate every view agrees on:
+chips derived from the parser's field inventory with per-value counts (typed entry instead of a
+value list for high-cardinality fields), the stated OR-within-a-field / AND-across-fields
+combination with the active time range and search text, filter state that is always visible and
+reversible, filters that keep applying as live entries arrive, and filtering fast enough to stay
+interactive at the supported dataset sizes.
+
 ## Requirements
 ### Requirement: Filter chips come from the field inventory
 The UI SHALL offer filter chips for `level` and for the fields the parser reported, showing each

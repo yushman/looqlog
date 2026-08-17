@@ -1,7 +1,13 @@
 # search Specification
 
 ## Purpose
-TBD - created by archiving change filtering-and-search. Update Purpose after archive.
+
+The `search` capability covers the search box over message text and field values: case-insensitive
+substring matching with the match highlighted, regular expressions behind the `re:` prefix applied
+as written, an invalid expression reported loudly instead of silently matching nothing, `field=value`
+typed into the box becoming a filter chip, clearing that restores the unsearched view, and search
+that keeps applying as live entries arrive.
+
 ## Requirements
 ### Requirement: Substring search
 The search input SHALL match entries whose message text or any field value contains the query as

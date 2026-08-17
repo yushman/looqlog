@@ -1,7 +1,13 @@
 # entry-index Specification
 
 ## Purpose
-TBD - created by archiving change timeline-and-table. Update Purpose after archive.
+
+The `entry-index` capability covers the client-side time-ordered index built over parsed entries:
+range queries and bucket counts that do not scan every entry, entries with no usable timestamp
+tracked apart rather than given a substitute time, incremental maintenance under live append and
+front eviction at the retention limit, and unambiguous, redraw-fast half-open range queries. It is
+the data structure the timeline and the table both read from, not a UI surface of its own.
+
 ## Requirements
 ### Requirement: Time-ordered index over entries
 The application SHALL maintain an index of entries ordered by timestamp, separate from the

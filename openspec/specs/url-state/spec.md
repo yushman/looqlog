@@ -1,7 +1,14 @@
 # url-state Specification
 
 ## Purpose
-TBD - created by archiving change filtering-and-search. Update Purpose after archive.
+
+The `url-state` capability covers encoding the view in the URL hash so it can be reproduced or
+shared: a documented grammar for the time range, field filters, search query, format override and
+timezone with percent-encoded values that round-trip, debounced writes that replace rather than grow
+the history stack, the encoded state applied on load before the user sees an unfiltered view, a
+malformed hash reported rather than ignored, and an explicit warning that the search text and field
+values a link carries are themselves fragments of the log.
+
 ## Requirements
 ### Requirement: Hash grammar
 The application SHALL encode view state in the URL hash using an explicit, documented grammar

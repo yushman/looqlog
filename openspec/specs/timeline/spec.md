@@ -1,7 +1,14 @@
 # timeline Specification
 
 ## Purpose
-TBD - created by archiving change timeline-and-table. Update Purpose after archive.
+
+The `timeline` capability covers the count-per-bucket histogram above the table: filtered counts
+drawn over a background series of the unfiltered ones so a filter's exclusions stay visible, bucket
+widths taken from a fixed ladder of round intervals, a default span chosen from the bulk of the data
+so a few absurd timestamps cannot destroy the axis, drag-selection that sets the shell's active time
+range, timestampless entries surfaced rather than silently dropped, and throttled redraws under live
+growth.
+
 ## Requirements
 ### Requirement: Count-per-bucket histogram
 The timeline SHALL render entry counts per time bucket for the entries matching the active
