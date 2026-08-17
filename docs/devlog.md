@@ -1487,6 +1487,249 @@ instructions:**
   localStorage]... preserves the zero-config principle") — implemented exactly as
   those decisions state, not re-litigated here.
 
+## 2026-08-16 — `frontend-visual-redesign`: darker palette, six level colors, tighter density
+
+Value/spacing-only retune of `web/src/style.css` + two component files, per the brainstorm doc
+`docs/superpowers/specs/2026-08-14-frontend-visual-redesign.md` and this change's `design.md`
+D1–D8. No markup, no layout, no new dependencies.
+
+**Shipped:**
+
+- D1: dark `--bg` `#121212`→`#0b0c0f`, `--border` opacity `0.22`→`0.13`, `--code-bg` opacity
+  `0.1`→`0.06`, `--accent` `#7aa8ff`→`#6e8bff`, `--error` `#ff8a80`→`#f0525a`, `--warn`
+  `#ffca7a`→`#f5a742`. `--fg`/`--muted` unchanged.
+- D2: new `--bg-elevated` token (`#131417` dark, `#f7f7f8` light), applied to `.topbar` only.
+- D3: six new `--level-*`/`--level-*-bg` token pairs (trace/debug/info/warn/error/fatal), light and
+  dark. `.level-badge.level-*` repointed one rule per level — `fatal`/`critical` share
+  `--level-fatal` (an alias, not a seventh level); every other level gets its own token. This is
+  the fix for TRACE/DEBUG previously sharing `--muted` and INFO borrowing `--accent-fg`.
+- D4: timeline background series fill `rgba(148,163,184,0.45)`→`rgba(148,163,184,0.25)`. Foreground
+  (filtered) series switched from a hardcoded blue to `--accent`, read via
+  `getComputedStyle(document.documentElement).getPropertyValue('--accent')` at render time and
+  converted to rgba via a small `hexToRgba` helper (`web/src/components/looq-timeline.ts`) so a
+  future token change doesn't need a code edit. **Resolved opacity: fill 0.6, stroke 0.9** — chosen
+  by rendering a filtered timeline (level=ERROR chip) against the real `#0b0c0f` background in a
+  Playwright-driven browser and comparing the two series side by side: at 0.6/0.9 the accent bars
+  read clearly as "the interesting subset" without washing out, while the muted 0.25 background
+  bars stayed legible as context rather than competing for attention.
+- D5: filter-bar padding `0.5rem 0.75rem`→`0.4rem 0.6rem`, filter-chip padding `0.15em 0.6em`→
+  `0.12em 0.5em`, error/confirm banner padding `0.6em 0.9em`→`0.5em 0.75em`, detail-panel padding
+  `0.75rem`→`0.6rem`. Container radius `6px`→`5px` on theme-toggle, filter-bar, error-banner,
+  confirm-banner, detail-panel; drop-zone (actually `8px` in the shipped code, not the `6px`
+  `design.md` implied) also moved to `5px` since it's named in the same list. Table-viewport radius
+  and badge/pill radii left untouched, as specified. **Held up as-is** — checked both a filtered and
+  unfiltered dark-mode render plus a light-mode render with the detail panel open; nothing read as
+  cramped next to the already-dense 24px rows, so none of the D5 percentages needed easing back.
+- D6: `.conn-indicator.conn-live`/`.conn-disconnected` switched from solid one-off hex
+  (`#16a34a`/`#b91c1c` with white text) to the same tinted-text-on-tinted-background pattern the
+  other two connection states already used, pointing at `--level-info`/`--level-error` — keeps the
+  four `.conn-indicator` states visually consistent with each other and with the level badges,
+  and reads correctly in both themes (checked via forced `.conn-live`/`.conn-disconnected` class
+  swaps in a live page, both themes).
+- D7: **left open, not resolved.** No live human was reachable to answer the monospace-scope
+  question a third time; per the change's own instruction, proceeded with the existing split
+  (`ui-monospace` for data, `system-ui` for chrome) rather than assuming an answer. Still an open
+  question for whoever picks this up next.
+
+**Verification:**
+
+- Playwright against the real compiled binary (`scripts/build-frontend.sh` + `cargo build --release
+  -p looq`), a 12-line fixture covering all six levels twice each.
+- File mode needed a real TTY on stdin to select (`mode_for` in `crates/looq/src/cli.rs` always
+  picks stdin mode on a non-tty stdin, which every non-interactive shell has) — worked around with
+  `script -q /dev/null looq …` to allocate a pty, confirmed `file mode` banner + drop-zone +
+  file-upload flow all render correctly with the new tokens. Stream mode tested directly (its own
+  shell, `looq-live-tail.ts`, non-tty stdin selects it by default).
+- All six level badges confirmed pairwise distinct by close-up screenshot in both dark and light
+  (gray → blue → green → amber → red → purple in both appearances) — satisfies the new `theming`
+  scenario "Every level has its own color."
+- Top bar vs. body separation (`--bg-elevated`) checked visually in both themes — subtle but present,
+  as designed (a "small step up," not a strong border).
+- Theme toggle mechanics (`theming`'s existing behavioral requirements, unaffected by this change in
+  principle) re-verified against the new tokens: Auto→Light→Dark→Auto cycle, `localStorage`
+  persistence across a real reload, explicit dark override surviving a light system preference —
+  all still correct.
+- Error banner and confirm banner visually checked (forced-visible via DOM, since neither's real
+  trigger condition — empty file, large-file confirm — was convenient to reproduce with the small
+  fixture) — legible, correctly padded/radiused, no regression.
+
+**Tests:**
+
+- `cargo test --workspace`: one flaky failure on the first run
+  (`fast_producer_slow_consumer_never_blocks_and_reports_an_accurate_gap`, a `wait_until_serving`
+  5s timeout under concurrent compile load) that passed cleanly both in isolation and on a full
+  unconstrained re-run — pre-existing timing flakiness, not caused by this change (this change
+  touched no Rust code at all). Full suite: 46+ tests, 0 failures on the clean re-run.
+- `npm run test` (vitest): 55/55 passed, unmodified.
+- `npm run typecheck`: clean after fixing a `noUncheckedIndexedAccess` complaint in the new
+  `hexToRgba` helper (switched from regex capture groups to `hex.slice()` on the pre-validated
+  string).
+- `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+
+**Deviation from the task list worth flagging:** `tasks.md` 2.4 and the proposal's Impact section
+both describe the LIVE/DISCONNECTED color change as living in `looq-live-tail.ts` — in the actual
+code those colors are CSS rules (`.conn-indicator.conn-live`/`.conn-disconnected` in `style.css`),
+not TypeScript constants; `looq-live-tail.ts` only supplies the state labels. Implemented the color
+change in `style.css` where the colors actually live; no `looq-live-tail.ts` edit was needed or
+made.
+
+## 2026-08-16 — `frontend-terminal-overhaul`: monospace everywhere, letter badges, topbar accent
+
+Markup-level polish on top of `frontend-visual-redesign`'s palette/density pass, per this change's
+`design.md` D1–D4. Resolves D7 from the prior change (typography scope), left open there after two
+unanswered rounds — the user has now answered it directly ("шрифт хочется более айтишный"): monospace
+everywhere, not just data surfaces.
+
+**Shipped:**
+
+- D1: new `--font-mono` token (`ui-monospace, "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo,
+  Consolas, "Liberation Mono", monospace`, one declaration, not duplicated per theme block — a font
+  stack isn't a themeable color). `body`'s `font-family` switched from `system-ui, -apple-system,
+  sans-serif` to `var(--font-mono)`. Deleted 10 duplicate `font-family: ui-monospace, SFMono-Regular,
+  Menlo, monospace;` declarations across `style.css` (`.status`, `.diagnostics-counts`/
+  `.diagnostics-examples`, `.conn-indicator`, `.lines-per-sec`, `.timeline-summary`,
+  `.entry-table-summary`, `.entry-row`, `.detail-core dd`, `.detail-message`, `.detail-fields` —
+  more than the "six-plus" `tasks.md` estimated).
+- D1 caught a real regression during verification, not assumed away: `.detail-message` is a `<pre>`
+  element, and `<pre>` carries its own UA-stylesheet `font-family: monospace` rule — a direct
+  selector match, not inheritance, so deleting its explicit declaration exposed the browser's bare
+  `monospace` default instead of `--font-mono`'s broadened stack. Confirmed via
+  `getComputedStyle(...).fontFamily` before/after in a real Chromium tab (Playwright): every other
+  one of the 10 elements inherits `--font-mono` correctly (none of them are `pre`/`code`/`kbd`/
+  `samp`); `.detail-message` needed its declaration restored, explicitly pointed at
+  `var(--font-mono)`, with a comment explaining why it's not just inheriting like its siblings.
+- D2: `.filter-field-name` gained `text-transform: uppercase; letter-spacing: 0.04em;`. Scoped to
+  that one class only — not applied anywhere else.
+- D3: entry-table level badges are now single-letter circles (`display: inline-flex`, `1.6em` ×
+  `1.6em`, `border-radius: 50%`) instead of padded text pills. Visible text is the level's first
+  letter (T/D/I/W/E/F — confirmed unique against `crates/looq-core/src/level.rs`'s canonical
+  `Level::as_str()` output, which is what actually reaches the frontend; `entry.level` is never
+  `"WARNING"`/`"CRITICAL"`, those are alias inputs normalized before the DTO crosses the WASM
+  boundary). `aria-label` and `title` both carry the full word. The six `.level-badge.level-*`
+  color rules are untouched — shape/text-content change only, as scoped. Filter-bar chips
+  (`looq-filter-bar.ts`) were not touched — verified by reading `chipHtml`/`renderChips`, which
+  render `escapeHtml(value)` unmodified; level values reaching the chip bar come from
+  `EntryIndex.levelStats` (`entry-index.ts`), keyed by the same full canonical `entry.level` string.
+- D4: `.topbar` gained `padding: 0.5rem 0.75rem` (the density-scale value `design.md` proposed, kept
+  as-is — it read correctly against the new border, no adjustment needed) and
+  `border-bottom: 2px solid var(--accent)`. Added `.brand-mark` — a `0.6em` × `0.6em` filled square,
+  `background: var(--accent)`, `display: inline-block` — via a `<span class="brand-mark"
+  aria-hidden="true"></span>` before `<h1>looq</h1>` in `web/index.html`. `aria-hidden` keeps the
+  `<h1>`'s accessible name as plain "looq" (confirmed by accessibility snapshot), so the mark is
+  decoration only, not a11y noise.
+
+**Verification:**
+
+- Built the real frontend (`scripts/build-frontend.sh`, `wasm-pack` + `vite build`) and ran the
+  actual compiled `looq` binary (`cargo build -p looq`), driven by Playwright against
+  `http://127.0.0.1:PORT` — not `vite dev`, which can't serve `/wasm/core.wasm` as a dynamic import
+  (`public/` assets are copied as-is, not transform-eligible; confirmed by hitting exactly that
+  error before switching to the real binary). File mode needed a real TTY on stdin
+  (`mode_for` in `crates/looq/src/cli.rs` always picks stdin mode on a non-tty stdin) — worked
+  around with `script -q /dev/null looq …`, same as `frontend-visual-redesign`'s precedent.
+- **Accessibility guarantee (the one part of this change tied to an actual spec requirement,**
+  `entry-table` spec's new "Abbreviated level still exposes its full name" scenario): a 6-line
+  fixture covering all six levels, Playwright `browser_snapshot` (reads the accessibility tree, not
+  visual text) showed `generic "TRACE" [ref=…]: T` for every badge — accessible name is the full
+  level word, visible text is the single letter. Confirmed `aria-label`/`title` both equal the full
+  word via `getAttribute`. Filter-bar chips in the same snapshot still read `"TRACE (1)"`,
+  `"DEBUG (1)"`, etc. — untouched, full text.
+- **Font-family regression check (task 1.3):** `getComputedStyle(el).fontFamily === getComputedStyle(document.body).fontFamily`
+  checked for all 10 previously-duplicated elements across three fixture scenarios (plain entries
+  for the table/detail/summary elements, a live-tail stdin session for `.conn-indicator`/
+  `.lines-per-sec`, a malformed-lines file for `.diagnostics-counts`/`.diagnostics-examples`) — all
+  matched after the `.detail-message` fix above; none before it.
+- **Click interaction (task 6.2):** clicked directly on the `.level-badge.level-info` circle
+  (real Playwright pointer click, not a synthetic event dispatch) and confirmed the row it belongs
+  to becomes `.selected` and its detail panel opens with the matching entry — the smaller circular
+  target is still a real, correctly-delegated click target (`rowsEl`'s click listener uses
+  `closest("[data-ordinal]")`, unaffected by the badge's shape).
+- All six level circles checked for letter legibility against their background color, both themes,
+  via screenshot (`docs/ui.png`-style close look, not just a pass/fail assertion) — gray/blue/green/
+  amber/red/purple all read clearly in both appearances.
+- Topbar checked in both themes: reads as a visible strip now (not the prior no-padding patch),
+  accent border and brand-mark square both visible against `--bg`/`--bg-elevated`, page width/
+  centering unchanged (no full-bleed).
+- Hit one unrelated, pre-existing bug while constructing a malformed-lines fixture for the
+  `.diagnostics-*` font check: `failed to parse …: TypeError: Cannot read properties of undefined
+  (reading 'replace')` from `looq-diagnostics.ts`'s `escapeHtml`. Not caused by this change (no
+  diagnostics/parsing code touched here) — not investigated further, noted here rather than fixed,
+  since it's outside this change's scope.
+
+**Tests:**
+
+- `cargo test --workspace`: 103 passed (19+27+35+22 across the four crates with tests), 0 failed —
+  entirely unaffected, no Rust touched, as expected.
+- `npm run test` (vitest): 55/55 passed, unmodified.
+- `npm run typecheck`: clean.
+- `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+
+**README check (task 7.2):** no changes needed — same as `frontend-visual-redesign`'s own precedent,
+this is a visual/presentation-only change with no install-step, command, flag, or output difference.
+
+**Five stale-Purpose specs noted, not fixed (task 5.1 scope boundary):** `entry-table`'s own
+`## Purpose` ("TBD - created by archiving change timeline-and-table...") was rewritten as part of
+archiving this change, since this change already touches `entry-table`'s delta. `entry-index`,
+`filtering`, `search`, `timeline`, and `url-state` have the same stale-Purpose placeholder and were
+deliberately left alone — fixing them here would be scope creep past what this change's `tasks.md`
+asked for. Listed below under Ideas for later.
+
+## 2026-08-17 — the `escapeHtml(undefined)` crash was the `Option::None` boundary bug
+
+Committed the two frontend passes that were still sitting in the working tree (`58e7622` for
+`web/`, `3df0425` for the `crates/looq/assets/` rebuild — the first commit alone would have failed
+CI's `frontend-artifact-staleness` job, since the embedded copy was still the pre-restyle build),
+then closed the one open bug on the Ideas list.
+
+**The bug was already fixed, by `f8bd98e` ("serialize wasm Option fields as null, not undefined"),
+committed a few hours after `frontend-terminal-overhaul`'s devlog entry was written.** The entry
+attributed the `TypeError: Cannot read properties of undefined (reading 'replace')` to
+`looq-diagnostics.ts`'s `escapeHtml` — that attribution was wrong. `DiagnosticsSummaryDto` has no
+`Option` fields, so nothing it hands to `escapeHtml` can be `undefined`; the actual crash is
+`entry.level` arriving as `undefined` instead of `null` and reaching `escapeHtml` in
+`looq-filter-bar.ts`'s chip rendering (all four components define their own `escapeHtml`, which the
+bundle renames to `escapeHtml`/`escapeHtml$1`/… — an easy misread off a production stack trace).
+Everything after `setDiagnostics` in `openFile`'s `try` block is inside the same catch, so any of
+them shows up as the same `failed to parse <file>: …` banner.
+
+**Verified both directions against the real binary** (Playwright, `script -q /dev/null looq …` for
+the TTY, not `vite dev`), with a fixture whose plain-text fallback produces entries that carry no
+level (`.playwright-mcp/malformed.jsonl`, 8 lines: valid JSON, a truncated line, a bare text line,
+a JSON array, a bad timestamp):
+
+- Current `main`: file opens, 8 rows, level chips `INFO (3) / WARN (1) / ERROR (1) / DEBUG (1)`,
+  no error banner. A mostly-valid JSON fixture (13 lines, 3 flagged) also renders the diagnostics
+  panel correctly — `invalid_json: 1`, `non_object_json: 1`, `unparsable_timestamp: 1` plus their
+  three examples.
+- Same build with `.serialize_missing_as_null(true)` commented out: the exact banner text from the
+  original report, `failed to parse malformed.jsonl: TypeError: Cannot read properties of undefined
+  (reading 'replace')`.
+
+**Build-cache trap worth remembering:** restoring the reverted line with `mv lib.rs.bak lib.rs`
+carries the backup's *older* mtime, so `wasm-pack` skipped the rebuild and the "fixed" run still
+served the broken wasm — the bug appeared to survive its own fix. `touch` on the source, then
+rebuild, and `crates/looq/assets/wasm/core.wasm` came back byte-identical to the committed one
+(so the frontend build is reproducible on this machine, which is what the staleness CI job relies
+on).
+
+No regression test added: catching this at its real layer needs `wasm-bindgen-test` over the DTO
+shapes, which is still the open NEEDS HUMAN DECISION on the Ideas list. Testing it in the frontend
+would mean asserting on `undefined` for a field `wasm-types.ts` types as `string | null` — codifying
+the wrong contract.
+
+**Tests:** `cargo test --workspace` 103 passed / 0 failed; `npm run test` 55/55; `npm run typecheck`
+clean.
+
+**Five stale spec Purposes rewritten** (`entry-index`, `filtering`, `search`, `timeline`,
+`url-state`) — all five had read "TBD - created by archiving change … Update Purpose after archive."
+since their capabilities were first archived. Each is now a paragraph in `entry-table`'s voice,
+written from that spec's own requirements rather than from memory of the change that created it.
+Writing `url-state`'s caught a real misstatement in my own first draft: I wrote that a shared link
+"carries the view but never the log data", which is backwards — the spec's sharing-caveat
+requirement exists precisely *because* the encoded search text and field values are fragments of the
+log. `openspec validate --specs --strict`: 20 passed, 0 failed. No `TBD - created by archiving`
+strings left anywhere under `openspec/specs/`.
+
 ## Ideas for later
 
 - A disk-backed or larger in-page benchmark harness (median/stddev over many runs,
