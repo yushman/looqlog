@@ -1937,11 +1937,14 @@ conclusion:
 Tests after the fix: `npm run test` 55/55, `npm run typecheck` clean, `cargo test --workspace`
 103/0, assets byte-identical across two rebuilds.
 
-**Open question for the spec:** `filtering` now carries "Filter controls stay operable while entries
-arrive", added by `frontend-three-pane-layout`. `entry-table` has no equivalent requirement for row
-selection, which is why the same defect could ship in the same change that fixed it next door. The
-guarantee belongs in `entry-table` too — not written yet, pending a decision on whether to amend the
-accepted spec directly or run a small change for it.
+**Spec gap closed.** `filtering` carries "Filter controls stay operable while entries arrive" (added
+by `frontend-three-pane-layout`); `entry-table` had no equivalent for row selection, which is exactly
+why the same defect could ship in the same change that fixed it next door. `entry-table` now has
+"Rows stay selectable while entries arrive", amended directly into the accepted spec rather than
+routed through a change proposal — the code already behaves this way, so the spec was behind the
+code, not ahead of it. It names the permitted rewrites (entry, selected state, active search) and
+forbids the wholesale rebuild, so the next person to touch `renderVisibleRows` has the constraint in
+front of them. `openspec validate --specs --strict`: 20 passed.
 
 ## Ideas for later
 

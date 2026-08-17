@@ -105,3 +105,19 @@ throwing or scrolling unexpectedly.
 - **THEN** the table adjusts without an error and indicates that earlier entries are no longer
   retained
 
+
+### Requirement: Rows stay selectable while entries arrive
+Re-rendering the table as entries arrive SHALL NOT replace the row elements a user is interacting
+with. A row showing the same entry SHALL survive an update untouched, so that an ordinary click — a
+press and a release separated by a human interval — selects it while a stream is running. Rows MAY be
+rewritten when the entry they show, its selected state or the active search changes; they SHALL NOT
+be rebuilt wholesale on every render.
+
+#### Scenario: Selecting an entry during a live stream
+- **WHEN** entries are arriving continuously, the view is not following the tail, and the user
+  presses a row and releases it roughly a sixth of a second later
+- **THEN** that entry becomes the selection and the detail view describes it
+
+#### Scenario: Unchanged rows are left alone
+- **WHEN** a live batch arrives and the visible rows still show the same entries
+- **THEN** those rows are not re-created, and anything the pointer or keyboard focus is on survives
