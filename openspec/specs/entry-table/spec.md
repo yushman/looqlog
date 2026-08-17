@@ -1,7 +1,13 @@
 # entry-table Specification
 
 ## Purpose
-TBD - created by archiving change timeline-and-table. Update Purpose after archive.
+
+The `entry-table` capability covers the virtual-scrolled table of parsed log entries: fixed-height
+rows bounded by the viewport regardless of dataset size, timestamp/level/message columns with
+explicit-absence handling for missing values, truncation with a reachable full-text detail view for
+long messages, following the shell's active time range, and surviving live growth and eviction
+without losing the user's place.
+
 ## Requirements
 ### Requirement: Virtual scrolling
 The table SHALL render only the rows in and near the viewport, so the number of DOM nodes stays
@@ -19,7 +25,10 @@ bounded regardless of dataset size. Scrolling a 50,000-entry dataset SHALL stay 
 The table SHALL show timestamp, level and message columns. Timestamps SHALL be rendered in the
 timezone the parser applied and SHALL state which that is. Levels SHALL be visually
 distinguishable, and an entry with no level or no timestamp SHALL render as explicitly absent
-rather than as an empty cell that could be mistaken for a blank value.
+rather than as an empty cell that could be mistaken for a blank value. The level column MAY render
+as a compact, color-coded abbreviation rather than the full level word, provided the full level
+name remains available as accessible text (for assistive technology) and as a hover tooltip — an
+abbreviation SHALL NOT be the only way the level is exposed.
 
 #### Scenario: Timezone is stated, not implied
 - **WHEN** entries are displayed after being parsed with the UTC default
@@ -29,6 +38,12 @@ rather than as an empty cell that could be mistaken for a blank value.
 - **WHEN** an entry has no level
 - **THEN** the level cell shows an explicit absence marker rather than looking like an empty
   string value
+
+#### Scenario: Abbreviated level still exposes its full name
+- **WHEN** the level column renders a compact abbreviation (for example, a single letter) instead
+  of the full level word
+- **THEN** the full level name is still available to a screen reader and as a tooltip on hover, so
+  no user loses access to the actual value
 
 ### Requirement: Long messages do not break the layout
 The table SHALL truncate long messages to a single line per row and SHALL make the full text
