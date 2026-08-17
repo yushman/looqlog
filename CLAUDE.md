@@ -83,21 +83,25 @@ This repo uses OpenSpec. The `openspec/` directory is **mandatory**.
 bugfix starts as a proposal, is implemented against its `tasks.md`, and is archived
 when done, so that `specs/` always describes what the code actually does.
 
-**Condensed flow: explore → ff → apply → archive.**
+**The flow is `opsx:explore` → `opsx:ff` → `opsx:apply` → `opsx:archive`, and nothing
+longer.** This is a startup: the point of the spec artifacts is that the next person
+(or agent) can tell what the code is supposed to do, not to run a committee. Use the
+`opsx:` commands, not the slower `openspec-propose` dialogue.
 
-- **explore** (`opsx:explore` / `openspec-explore`) — think the problem through and
-  resolve open questions *before* anything lands in `openspec/changes/`. Read the
-  relevant docs/ADRs, ask the user what's ambiguous, decide scope.
-- **ff** ("fast-forward propose") — once explore has resolved the open questions,
-  write `proposal.md` + `design.md` + `specs/*.md` + `tasks.md` directly, in one pass,
-  instead of the slower interactive `openspec-propose` skill dialogue. `openspec
-  validate <name> --strict` must pass before moving on.
-- **apply** (`openspec-apply-change`) — hand the validated `tasks.md` to a fresh
-  subagent: groom in the main session, execute in a clean agent with no leftover
-  context. Verify, don't just trust its self-report.
-- **archive** (`openspec-archive-change`) — after `openspec validate --strict` passes
-  again post-implementation, archive so `openspec/specs/` reflects what actually
-  shipped.
+- **`opsx:explore`** — think the problem through and resolve open questions *before*
+  anything lands in `openspec/changes/`. Read the relevant docs/ADRs, ask the user
+  what's ambiguous, decide scope.
+- **`opsx:ff`** ("fast-forward propose") — once explore has resolved the open
+  questions, write `proposal.md` + `design.md` + `specs/*.md` + `tasks.md` directly,
+  in one pass. `openspec validate <name> --strict` must pass before moving on.
+- **`opsx:apply`** — hand the validated `tasks.md` to a fresh subagent: groom in the
+  main session, execute in a clean agent with no leftover context. Verify, don't just
+  trust its self-report.
+- **`opsx:archive`** — after `openspec validate --strict` passes again
+  post-implementation, archive so `openspec/specs/` reflects what actually shipped.
+
+A defect found while verifying an unarchived change is fixed inside that change —
+new tasks appended to its `tasks.md` — not spun out as a follow-up proposal.
 
 `docs/mvp-plan.md` says *what* gets built and when; OpenSpec changes say *what the
 behavior is*. They are not substitutes for each other.
