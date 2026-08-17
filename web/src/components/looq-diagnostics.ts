@@ -1,18 +1,60 @@
 // Presentational: surfaces parser diagnostics on screen (app-shell spec, "Parser
-// diagnostics reach the user" / design.md D5 — this project's silent-failure list
-// stops being a parser concern and becomes a product one here). Never console-only.
+// diagnostics reach the user" — this project's silent-failure list stops being a
+// parser concern and becomes a product one here). Never console-only.
+//
+// A collapsible rail surface (design.md D7 of `frontend-three-pane-layout`), which
+// is only allowed because the collapsed summary itself carries the skip count and
+// its severity, and because a severe skip ratio opens the section on its own. A
+// warning a user has to expand to discover would not satisfy "diagnostics reach the
+// user"; a summary line that always states the count does.
 
 import type { DiagnosticsSummaryDto } from "../wasm-types";
+
+/** Same threshold the expanded panel uses for its warning styling. */
+const SEVERE_SKIP_RATIO = 0.2;
 
 export class LooqDiagnostics extends HTMLElement {
   private summary: DiagnosticsSummaryDto | null = null;
   private entriesEmitted = 0;
   private cumulative = false;
 
-  /** `cumulative`: true for a live stream (design.md D7) — the one long-lived
-   * parser instance never resets, so these counts describe everything ever seen,
-   * not what is currently retained after client-side eviction (`live-tail-ui`
-   * spec, "Field inventory reported as cumulative"). File mode leaves this false. */
+  private detailsEl!: HTMLDetailsElement;
+  private stateEl!: HTMLElement;
+  private headlineEl!: HTMLElement;
+  private bodyEl!: HTMLElement;
+  private autoOpened = false;
+  /** Live mode calls `setDiagnostics` on every render tick; the body is only
+   * rewritten when its content actually changed, so the nested "Examples" section
+   * keeps its open state (and nothing inside gets detached under a pointer). */
+  private lastBodyKey: string | null = null;
+
+  connectedCallback(): void {
+    if (this.detailsEl) {
+      return;
+    }
+    this.innerHTML = `
+      <details class="rail-section" id="diagnostics-section">
+        <summary>
+          <span class="rail-section-title">Diagnostics</span>
+          <span class="rail-section-state" id="diagnostics-state">0 skipped</span>
+        </summary>
+        <div class="rail-section-body">
+          <p class="diagnostics" id="diagnostics-headline"></p>
+          <div id="diagnostics-body"></div>
+        </div>
+      </details>
+    `;
+    this.detailsEl = this.querySelector("#diagnostics-section") as HTMLDetailsElement;
+    this.stateEl = this.querySelector("#diagnostics-state") as HTMLElement;
+    this.headlineEl = this.querySelector("#diagnostics-headline") as HTMLElement;
+    this.bodyEl = this.querySelector("#diagnostics-body") as HTMLElement;
+    this.render();
+  }
+
+  /** `cumulative`: true for a live stream — the one long-lived parser instance
+   * never resets, so these counts describe everything ever seen, not what is
+   * currently retained after client-side eviction (`live-tail-ui` spec, "Field
+   * inventory reported as cumulative"). File mode leaves this false. */
   setDiagnostics(
     summary: DiagnosticsSummaryDto | null,
     entriesEmitted: number,
@@ -24,31 +66,47 @@ export class LooqDiagnostics extends HTMLElement {
     this.render();
   }
 
-  connectedCallback(): void {
-    this.render();
-  }
-
   private render(): void {
+    if (!this.detailsEl) {
+      return; // not connected yet; connectedCallback renders once it is
+    }
     const summary = this.summary;
     const cumulativeNote = this.cumulative
       ? `<p class="cumulative-note">Counts are cumulative for the life of this stream —
          they describe every line seen so far, not only what is currently retained
          after older entries were evicted.</p>`
       : "";
+
     if (summary === null || summary.total === 0) {
-      this.innerHTML = `<p class="diagnostics ok">No skipped lines.</p>${cumulativeNote}`;
+      // The collapsed state still states the outcome: nothing was skipped.
+      this.stateEl.textContent = "0 skipped";
+      this.stateEl.className = "rail-section-state";
+      this.headlineEl.textContent = "No skipped lines.";
+      this.headlineEl.className = "diagnostics ok";
       this.classList.remove("warning");
+      this.writeBody("clean", cumulativeNote);
       return;
     }
 
     const skipRatio = summary.total / Math.max(1, summary.total + this.entriesEmitted);
-    const isSevere = skipRatio > 0.2;
+    const isSevere = skipRatio > SEVERE_SKIP_RATIO;
     this.classList.toggle("warning", isSevere);
+
+    // The count and its severity are readable without expanding anything.
+    this.stateEl.textContent = `${summary.total} skipped`;
+    this.stateEl.className = `rail-section-state${isSevere ? " warning" : ""}`;
+    this.headlineEl.className = `diagnostics${isSevere ? " warning" : ""}`;
+    this.headlineEl.textContent =
+      `${summary.total} line(s) skipped or flagged, next to ${this.entriesEmitted} entries produced.`;
+
+    if (isSevere && !this.autoOpened) {
+      this.detailsEl.open = true;
+      this.autoOpened = true;
+    }
 
     const countRows = Object.entries(summary.counts)
       .map(([reason, count]) => `<li><code>${escapeHtml(reason)}</code>: ${count}</li>`)
       .join("");
-
     const exampleRows = summary.examples
       .slice(0, 20)
       .map(
@@ -56,25 +114,29 @@ export class LooqDiagnostics extends HTMLElement {
           `<li>line ${example.line}: ${escapeHtml(example.reasonLabel)} — ${escapeHtml(example.detail)}</li>`,
       )
       .join("");
-
     const cappedNote =
       summary.total > summary.examples.length
         ? `<p>Showing ${summary.examples.length} of ${summary.total} examples (capped at ${summary.cap}); exact counts above are not capped.</p>`
         : "";
 
-    this.innerHTML = `
-      <p class="diagnostics${isSevere ? " warning" : ""}">
-        <strong>${summary.total}</strong> line(s) skipped or flagged, next to
-        <strong>${this.entriesEmitted}</strong> entries produced.
-      </p>
-      <ul class="diagnostics-counts">${countRows}</ul>
-      <details>
-        <summary>Examples</summary>
-        <ul class="diagnostics-examples">${exampleRows}</ul>
-        ${cappedNote}
-      </details>
-      ${cumulativeNote}
-    `;
+    this.writeBody(
+      `${JSON.stringify(summary.counts)}|${summary.examples.length}|${summary.total}|${this.cumulative}`,
+      `<ul class="diagnostics-counts">${countRows}</ul>
+       <details class="diagnostics-examples-section">
+         <summary>Examples</summary>
+         <ul class="diagnostics-examples">${exampleRows}</ul>
+         ${cappedNote}
+       </details>
+       ${cumulativeNote}`,
+    );
+  }
+
+  private writeBody(key: string, html: string): void {
+    if (key === this.lastBodyKey) {
+      return;
+    }
+    this.lastBodyKey = key;
+    this.bodyEl.innerHTML = html;
   }
 }
 

@@ -11,7 +11,9 @@ import type { EntryIndex, RobustSpan } from "../entry-index";
 import { bucketCountForSpan, pickBucketWidthMs } from "../timeline-bucket";
 import type { TimeRange } from "../time-range";
 
-const CHART_HEIGHT = 140;
+/** uPlot sizes itself from this, so the CSS `min-height` alone cannot shrink the
+ * chart — the two are kept in step (task 9.4). */
+const CHART_HEIGHT = 110;
 const MIN_CHART_WIDTH = 480;
 
 function pad2(n: number): string {
@@ -65,15 +67,19 @@ export class LooqTimeline extends HTMLElement {
   connectedCallback(): void {
     this.innerHTML = `
       <div class="timeline-wrap">
-        <p class="timeline-summary" id="timeline-summary"></p>
-        <p class="timeline-outlier-note provisional-note" id="timeline-outlier" hidden>
-          <span id="outlier-text"></span>
-          <button type="button" id="zoom-out-btn">Show full range</button>
-        </p>
-        <div class="timeline-chart" id="chart"></div>
-        <div class="timeline-controls">
-          <button type="button" id="clear-range" hidden>Clear range</button>
+        <!-- Summary, outlier note and range controls share one line: three stacked
+             rows cost vertical space the entry table needs (task 9.4). -->
+        <div class="timeline-head">
+          <p class="timeline-summary" id="timeline-summary"></p>
+          <p class="timeline-outlier-note provisional-note" id="timeline-outlier" hidden>
+            <span id="outlier-text"></span>
+            <button type="button" id="zoom-out-btn">Show full range</button>
+          </p>
+          <div class="timeline-controls">
+            <button type="button" id="clear-range" hidden>Clear range</button>
+          </div>
         </div>
+        <div class="timeline-chart" id="chart"></div>
       </div>
     `;
     this.chartEl = this.querySelector("#chart") as HTMLDivElement;

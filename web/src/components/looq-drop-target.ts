@@ -1,7 +1,9 @@
 // Presentational: a file picker + drop target. Owns no parse state (design.md D7) —
 // it only reads a `File` from a user gesture and dispatches it upward. Preserves
 // ADR-0007 (the CLI path is a hint, not an auto-loaded file — the user still has to
-// pick it) and states the ADR-0002 no-network guarantee in the copy itself.
+// pick it). The ADR-0002 no-network guarantee is stated by the shell's own privacy
+// surface, which is worded per mode (TDR §12) and therefore cannot live in a
+// component only file mode mounts.
 
 export class LooqDropTarget extends HTMLElement {
   private hintHtml = "";
@@ -27,11 +29,6 @@ export class LooqDropTarget extends HTMLElement {
   private render(): void {
     this.innerHTML = `
       <div class="hint">${this.hintHtml || "Open a log file below."}</div>
-      <p class="privacy-note">
-        The file never leaves your browser: it is read locally and parsed by a
-        WebAssembly module running in this page, in a background worker. <code>looq</code>
-        itself never opens or reads it (ADR-0002, ADR-0007).
-      </p>
       <div id="drop-zone" class="drop-zone">
         <p>Drag and drop a log file here, or</p>
         <input type="file" id="file-picker" />

@@ -123,17 +123,17 @@ Run `looq --help` for the full flag list (`--port`, `--host`, `--open`,
 
 ## Filtering, search and sharing a view
 
-Filter chips, search and the active time range all narrow the *same* dataset — the
+Filters, search and the active time range all narrow the *same* dataset — the
 table, the timeline and every count you see agree, because they all read from one
 predicate.
 
-**Filter chips.** Every field the parser found (`level`, plus whatever fields your
-logs carry) gets a row of chips built from the actual values seen, with counts. Click
-a value to activate it. **Values of the same field are OR'd together** (selecting
-`ERROR` and `WARN` shows both); **different fields are AND'd** (adding `service=api`
-narrows to entries matching *both*). A field with too many distinct values to
-usefully list (past the parser's cardinality cap, or just impractically many for a
-row of buttons) offers a text box instead — type a value and click Add.
+**Filter controls.** Every field the parser found (`level`, plus whatever fields your
+logs carry) gets its own collapsible section in the left rail, listing the actual
+values seen, with counts. Click a value to activate it. **Values of the same field
+are OR'd together** (selecting `ERROR` and `WARN` shows both); **different fields are
+AND'd** (adding `service=api` narrows to entries matching *both*). A field with too
+many distinct values to usefully list (past the parser's cardinality cap, or just
+impractically many to list) offers a text box instead — type a value and click Add.
 
 **Search.** The search box matches message text and field values, case-insensitive,
 substring by default. Prefix a query with `re:` for a regular expression, applied

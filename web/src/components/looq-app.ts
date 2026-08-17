@@ -9,8 +9,10 @@ import "./looq-detection";
 import "./looq-diagnostics";
 import "./looq-timeline";
 import "./looq-entry-table";
+import "./looq-entry-detail";
 import "./looq-live-tail";
 import "./looq-filter-bar";
+import "./looq-workspace";
 
 import { ParseCancelledError, ParserBridge, WorkerInitError, type ParseProgress } from "../bridge";
 import { looksBinary, SNIFF_BYTES } from "../binary-detect";
@@ -23,9 +25,11 @@ import type { FieldInventoryDto } from "../wasm-types";
 import type { LooqDetection } from "./looq-detection";
 import type { LooqDiagnostics } from "./looq-diagnostics";
 import type { LooqDropTarget } from "./looq-drop-target";
+import type { LooqEntryDetail } from "./looq-entry-detail";
 import type { LooqEntryTable } from "./looq-entry-table";
 import type { FiltersChangeDetail, LooqFilterBar } from "./looq-filter-bar";
 import type { LooqTimeline } from "./looq-timeline";
+import type { LooqWorkspace } from "./looq-workspace";
 
 // No "error" state here (`error-states` spec, design.md D5): a failed open must
 // not destroy what's already loaded, so an error is a separate, persistent banner
@@ -115,11 +119,13 @@ export class LooqApp extends HTMLElement {
    * the view"). */
   private pendingHash: DecodedHash | null = null;
 
+  private workspace!: LooqWorkspace;
   private dropTarget!: LooqDropTarget;
   private detectionEl!: LooqDetection;
   private diagnosticsEl!: LooqDiagnostics;
   private timelineEl!: LooqTimeline;
   private tableEl!: LooqEntryTable;
+  private detailEl!: LooqEntryDetail;
   private filterBarEl!: LooqFilterBar;
   private statusEl!: HTMLParagraphElement;
   private errorBannerEl!: HTMLDivElement;
@@ -127,6 +133,12 @@ export class LooqApp extends HTMLElement {
   private hashNoticeEl!: HTMLParagraphElement;
   private copyLinkBtn!: HTMLButtonElement;
   private copyStatusEl!: HTMLParagraphElement;
+  /** Where the drop target lives once a file is open: the rail's collapsed "open
+   * another file" section. Before that it sits in the center pane, because
+   * `app-shell`'s "Nothing opened yet" state has to prompt for a file, not hide the
+   * prompt behind a closed drawer. */
+  private openFileBodyEl!: HTMLElement;
+  private unopenedEl!: HTMLElement;
 
   connectedCallback(): void {
     const runMode = readRunMode();
@@ -143,9 +155,18 @@ export class LooqApp extends HTMLElement {
     const hintTemplate = document.getElementById("hint-template") as HTMLTemplateElement | null;
     const hintHtml = hintTemplate?.innerHTML.trim() ?? "";
 
-    this.innerHTML = `
-      <looq-drop-target></looq-drop-target>
+    // One layout, defined once in `looq-workspace` and mounted the same way by the
+    // stream-mode shell (design.md D1) — this shell only decides what goes in each
+    // pane, never how the panes are arranged.
+    this.innerHTML = `<looq-workspace></looq-workspace>`;
+    const ws = this.querySelector("looq-workspace") as LooqWorkspace;
+    this.workspace = ws;
+
+    ws.pane("topbar").innerHTML = `
+      <span class="ws-mode">file mode</span>
       <p class="status" id="status"></p>
+    `;
+    ws.pane("messages").innerHTML = `
       <div class="error-banner" id="error-banner" hidden>
         <span id="error-banner-text"></span>
         <button type="button" id="error-banner-dismiss" aria-label="Dismiss">&times;</button>
@@ -155,27 +176,64 @@ export class LooqApp extends HTMLElement {
         <button type="button" id="confirm-continue">Continue</button>
         <button type="button" id="confirm-cancel">Cancel</button>
       </div>
-      <div id="results" hidden>
-        <looq-detection></looq-detection>
-        <looq-diagnostics></looq-diagnostics>
-        <p class="hash-notice" id="hash-notice" hidden></p>
-        <looq-filter-bar></looq-filter-bar>
-        <div class="share-link-row">
+      <p class="hash-notice" id="hash-notice" hidden></p>
+    `;
+    ws.pane("timeline").innerHTML = `<looq-timeline></looq-timeline>`;
+    ws.pane("rail").innerHTML = `<looq-filter-bar></looq-filter-bar>`;
+    // Secondary surfaces, collapsed by default (`app-shell` spec, "Secondary
+    // surfaces are collapsible without hiding warnings"). Detection and diagnostics
+    // carry their own state on their summary lines and open themselves when they
+    // have something the user must not miss.
+    ws.pane("rail-secondary").innerHTML = `
+      <details class="rail-section" id="open-file-section">
+        <summary><span class="rail-section-title">Open another file</span></summary>
+        <div class="rail-section-body" id="open-file-body"></div>
+      </details>
+      <looq-detection></looq-detection>
+      <looq-diagnostics></looq-diagnostics>
+      <details class="rail-section">
+        <summary>
+          <span class="rail-section-title">Privacy</span>
+          <span class="rail-section-state">never leaves the browser</span>
+        </summary>
+        <div class="rail-section-body">
+          <p class="privacy-note">
+            The file never leaves your browser: it is read locally and parsed by a
+            WebAssembly module running in this page, in a background worker.
+            <code>looq</code> itself never opens or reads it (ADR-0002, ADR-0007).
+          </p>
+        </div>
+      </details>
+      <details class="rail-section">
+        <summary><span class="rail-section-title">Share</span></summary>
+        <div class="rail-section-body">
           <button type="button" id="copy-link">Copy shareable link</button>
           <p class="share-caveat" id="copy-status" hidden></p>
         </div>
-        <looq-timeline></looq-timeline>
-        <looq-entry-table></looq-entry-table>
-      </div>
+      </details>
     `;
+    ws.pane("table").innerHTML = `
+      <div class="unopened-prompt" id="unopened"></div>
+      <looq-entry-table hidden></looq-entry-table>
+    `;
+    ws.pane("detail").innerHTML = `<looq-entry-detail></looq-entry-detail>`;
 
-    this.dropTarget = this.querySelector("looq-drop-target") as LooqDropTarget;
     this.detectionEl = this.querySelector("looq-detection") as LooqDetection;
     this.diagnosticsEl = this.querySelector("looq-diagnostics") as LooqDiagnostics;
     this.timelineEl = this.querySelector("looq-timeline") as LooqTimeline;
     this.tableEl = this.querySelector("looq-entry-table") as LooqEntryTable;
+    this.detailEl = this.querySelector("looq-entry-detail") as LooqEntryDetail;
     this.filterBarEl = this.querySelector("looq-filter-bar") as LooqFilterBar;
     this.statusEl = this.querySelector("#status") as HTMLParagraphElement;
+    this.openFileBodyEl = this.querySelector("#open-file-body") as HTMLElement;
+    this.unopenedEl = this.querySelector("#unopened") as HTMLElement;
+    this.workspace.setTimelineVisible(false);
+
+    // The drop target is one element that moves between the two places it belongs
+    // (center pane while unopened, rail once a file is loaded) — moving the node
+    // keeps its listeners and its picker state, where re-creating it would not.
+    this.dropTarget = document.createElement("looq-drop-target") as LooqDropTarget;
+    this.unopenedEl.appendChild(this.dropTarget);
     this.errorBannerEl = this.querySelector("#error-banner") as HTMLDivElement;
     this.confirmBannerEl = this.querySelector("#confirm-banner") as HTMLDivElement;
     this.hashNoticeEl = this.querySelector("#hash-notice") as HTMLParagraphElement;
@@ -215,6 +273,14 @@ export class LooqApp extends HTMLElement {
     this.timelineEl.addEventListener("range-change", (event) => {
       this.setActiveRange((event as CustomEvent<TimeRange | null>).detail);
     });
+    // The rail's time-range inputs write the same shell-owned range the timeline
+    // drag does (task 3.4) — one owner, two ways in.
+    this.filterBarEl.addEventListener("range-change", (event) => {
+      this.setActiveRange((event as CustomEvent<TimeRange | null>).detail);
+    });
+    this.tableEl.addEventListener("selection-change", (event) => {
+      this.detailEl.setSelectedOrdinal((event as CustomEvent<number | null>).detail);
+    });
     this.filterBarEl.addEventListener("filters-change", (event) => {
       const detail = (event as CustomEvent<FiltersChangeDetail>).detail;
       this.fieldFilters = detail.fieldFilters;
@@ -233,6 +299,7 @@ export class LooqApp extends HTMLElement {
     this.activeRange = range;
     this.timelineEl.setActiveRange(range);
     this.tableEl.setActiveRange(range);
+    this.filterBarEl.setActiveRange(range);
     this.updateFilterCounts();
     this.scheduleHashWrite();
   }
@@ -250,6 +317,7 @@ export class LooqApp extends HTMLElement {
       hasFilters ? (e) => matchesFieldFilters(e, this.fieldFilters) && matchesQuery(e, this.compiledQuery) : null,
     );
     this.tableEl.setQuery(this.compiledQuery);
+    this.detailEl.setQuery(this.compiledQuery);
     this.tableEl.refreshFilters();
     this.timelineEl.refresh();
     this.updateFilterCounts();
@@ -343,7 +411,7 @@ export class LooqApp extends HTMLElement {
   }
 
   /** `error-states` spec, "Failure does not destroy existing state": nothing here
-   * touches `entryIndex`/`resultsEl` until a NEW parse has actually succeeded —
+   * touches `entryIndex` or the workspace panes until a NEW parse has succeeded —
    * a failed second `openFile` call only ever populates `errorMessage`, never
    * clears what a previous successful call already produced. `skipPreflight`
    * lets the confirm-banner's "Continue" button resume a file past the
@@ -445,8 +513,15 @@ export class LooqApp extends HTMLElement {
       const index = new EntryIndex();
       index.append(result.entries);
       this.entryIndex = index;
+      // Before `setIndex`, not after: the timeline sizes its `uPlot` canvas from
+      // its container's `clientWidth` at draw time, which is 0 while the row is
+      // still hidden — it would draw at its minimum width and stay there. Nothing
+      // paints between here and the end of this task, so this is not a flash of an
+      // unfiltered view (the hash below is applied in the same synchronous run).
+      this.showResults();
       this.timelineEl.setIndex(index);
       this.tableEl.setIndex(index);
+      this.detailEl.setIndex(index);
 
       // A previous file's filters/range must not leak into this one (same
       // reasoning as `setActiveRange(null)` below, extended to the other two
@@ -466,16 +541,14 @@ export class LooqApp extends HTMLElement {
       // don't own.
       this.setActiveRange(null);
 
-      // Applied once, right here, before `#results` becomes visible — the hash's
-      // filters/range are in effect from the very first paint the user sees
-      // rather than a flash of the unfiltered view followed by a jump
-      // (`url-state` spec, "A hash is applied on load").
+      // Applied once, right here, in the same synchronous run that first shows the
+      // workspace — the hash's filters/range are in effect from the very first
+      // paint the user sees rather than a flash of the unfiltered view followed by
+      // a jump (`url-state` spec, "A hash is applied on load").
       if (this.pendingHash) {
         this.applyPendingHash(this.pendingHash);
         this.pendingHash = null;
       }
-
-      this.resultsEl().hidden = false;
     } catch (err) {
       if (err instanceof ParseCancelledError) {
         // A newer file superseded this one; that file's own openFile() call owns
@@ -499,8 +572,17 @@ export class LooqApp extends HTMLElement {
     }
   }
 
-  private resultsEl(): HTMLElement {
-    return this.querySelector("#results") as HTMLElement;
+  /** The first successful parse turns the unopened prompt into the workspace: the
+   * table and timeline appear, and the drop target moves from the center pane into
+   * the rail's collapsed "open another file" section (task 5.1) — the same element,
+   * relocated, so its listeners and picker survive. */
+  private showResults(): void {
+    if (this.dropTarget.parentElement !== this.openFileBodyEl) {
+      this.openFileBodyEl.appendChild(this.dropTarget);
+    }
+    this.unopenedEl.hidden = true;
+    this.tableEl.hidden = false;
+    this.workspace.setTimelineVisible(true);
   }
 
   private renderStatus(): void {

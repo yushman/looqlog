@@ -19,7 +19,9 @@ import "./looq-detection";
 import "./looq-diagnostics";
 import "./looq-timeline";
 import "./looq-entry-table";
+import "./looq-entry-detail";
 import "./looq-filter-bar";
+import "./looq-workspace";
 
 import { LiveTailSession, type ConnectionState } from "../live-tail";
 import { matchesFieldFilters, matchesQuery, type CompiledQuery, type FieldFilters } from "../predicate";
@@ -28,9 +30,11 @@ import { readAuthToken } from "../token";
 import { HashWriter } from "../url-hash";
 import type { LooqDetection } from "./looq-detection";
 import type { LooqDiagnostics } from "./looq-diagnostics";
+import type { LooqEntryDetail } from "./looq-entry-detail";
 import type { LooqEntryTable } from "./looq-entry-table";
 import type { FiltersChangeDetail, LooqFilterBar } from "./looq-filter-bar";
 import type { LooqTimeline } from "./looq-timeline";
+import type { LooqWorkspace } from "./looq-workspace";
 
 // D6 batches rendering so a fast producer doesn't turn every line into a layout
 // pass, but TDR §11's end-to-end live-tail latency target is <100ms — chosen well
@@ -86,6 +90,7 @@ export class LooqLiveTail extends HTMLElement {
   private diagnosticsEl!: LooqDiagnostics;
   private timelineEl!: LooqTimeline;
   private tableEl!: LooqEntryTable;
+  private detailEl!: LooqEntryDetail;
   private filterBarEl!: LooqFilterBar;
   private copyLinkBtn!: HTMLButtonElement;
   private copyStatusEl!: HTMLParagraphElement;
@@ -93,32 +98,56 @@ export class LooqLiveTail extends HTMLElement {
   connectedCallback(): void {
     const maxLines = Number(this.getAttribute("max-lines")) || 100_000;
 
-    this.innerHTML = `
-      <div class="live-tail-topbar">
-        <span class="conn-indicator" id="conn-indicator"></span>
-        <span class="lines-per-sec" id="rate">0 lines/sec</span>
-        <p class="privacy-note mode-indicator">
-          Streaming stdin: log lines cross a local WebSocket between the
-          <code>looq</code> process and this browser — a different guarantee from
-          file mode's "never leaves the browser" (the file is never involved here;
-          this data crosses a process boundary but not the machine, TDR §12).
-        </p>
-      </div>
-      <looq-detection></looq-detection>
-      <looq-diagnostics></looq-diagnostics>
+    // The same `looq-workspace` file mode mounts (design.md D1): only the contents
+    // of the panes differ, never the arrangement.
+    this.innerHTML = `<looq-workspace></looq-workspace>`;
+    const ws = this.querySelector("looq-workspace") as LooqWorkspace;
+
+    ws.pane("topbar").innerHTML = `
+      <span class="ws-mode">stdin stream</span>
+      <span class="conn-indicator" id="conn-indicator"></span>
+      <span class="lines-per-sec" id="rate">0 lines/sec</span>
+    `;
+    // Gap and eviction notices are not collapsible: a silently shortened live tail
+    // looks like "nothing happened" (CLAUDE.md's silent-failure list, ADR-0004).
+    ws.pane("messages").innerHTML = `
       <p class="provisional-note eviction-note" id="eviction-note" hidden></p>
       <p class="provisional-note gap-note" id="gap-note" hidden></p>
-      <looq-filter-bar></looq-filter-bar>
-      <div class="share-link-row">
-        <button type="button" id="copy-link">Copy shareable link</button>
-        <p class="share-caveat" id="copy-status" hidden></p>
-      </div>
-      <looq-timeline></looq-timeline>
+    `;
+    ws.pane("timeline").innerHTML = `<looq-timeline></looq-timeline>`;
+    ws.pane("rail").innerHTML = `<looq-filter-bar></looq-filter-bar>`;
+    ws.pane("rail-secondary").innerHTML = `
+      <looq-detection></looq-detection>
+      <looq-diagnostics></looq-diagnostics>
+      <details class="rail-section">
+        <summary>
+          <span class="rail-section-title">Privacy</span>
+          <span class="rail-section-state">crosses a local socket</span>
+        </summary>
+        <div class="rail-section-body">
+          <p class="privacy-note">
+            Streaming stdin: log lines cross a local WebSocket between the
+            <code>looq</code> process and this browser — a different guarantee from
+            file mode's "never leaves the browser" (no file is involved here; this
+            data crosses a process boundary but not the machine, TDR §12).
+          </p>
+        </div>
+      </details>
+      <details class="rail-section">
+        <summary><span class="rail-section-title">Share</span></summary>
+        <div class="rail-section-body">
+          <button type="button" id="copy-link">Copy shareable link</button>
+          <p class="share-caveat" id="copy-status" hidden></p>
+        </div>
+      </details>
+    `;
+    ws.pane("table-toolbar").innerHTML = `
       <div class="autoscroll-controls" id="autoscroll-controls" hidden>
         <button type="button" id="resume-btn"></button>
       </div>
-      <looq-entry-table></looq-entry-table>
     `;
+    ws.pane("table").innerHTML = `<looq-entry-table></looq-entry-table>`;
+    ws.pane("detail").innerHTML = `<looq-entry-detail></looq-entry-detail>`;
 
     this.stateEl = this.querySelector("#conn-indicator") as HTMLSpanElement;
     this.rateEl = this.querySelector("#rate") as HTMLSpanElement;
@@ -129,6 +158,7 @@ export class LooqLiveTail extends HTMLElement {
     this.diagnosticsEl = this.querySelector("looq-diagnostics") as LooqDiagnostics;
     this.timelineEl = this.querySelector("looq-timeline") as LooqTimeline;
     this.tableEl = this.querySelector("looq-entry-table") as LooqEntryTable;
+    this.detailEl = this.querySelector("looq-entry-detail") as LooqEntryDetail;
     this.filterBarEl = this.querySelector("looq-filter-bar") as LooqFilterBar;
     this.copyLinkBtn = this.querySelector("#copy-link") as HTMLButtonElement;
     this.copyStatusEl = this.querySelector("#copy-status") as HTMLParagraphElement;
@@ -137,7 +167,13 @@ export class LooqLiveTail extends HTMLElement {
     this.tableEl.addEventListener("viewport-scroll", (event) => {
       this.handleTableScroll((event as CustomEvent<number>).detail);
     });
+    this.tableEl.addEventListener("selection-change", (event) => {
+      this.detailEl.setSelectedOrdinal((event as CustomEvent<number | null>).detail);
+    });
     this.timelineEl.addEventListener("range-change", (event) => {
+      this.setActiveRange((event as CustomEvent<TimeRange | null>).detail);
+    });
+    this.filterBarEl.addEventListener("range-change", (event) => {
       this.setActiveRange((event as CustomEvent<TimeRange | null>).detail);
     });
     this.filterBarEl.addEventListener("filters-change", (event) => {
@@ -180,6 +216,7 @@ export class LooqLiveTail extends HTMLElement {
     this.activeRange = range;
     this.timelineEl.setActiveRange(range);
     this.tableEl.setActiveRange(range);
+    this.filterBarEl.setActiveRange(range);
     this.updateFilterCounts();
     this.scheduleHashWrite();
   }
@@ -199,6 +236,7 @@ export class LooqLiveTail extends HTMLElement {
       hasFilters ? (e) => matchesFieldFilters(e, this.fieldFilters) && matchesQuery(e, this.compiledQuery) : null,
     );
     this.tableEl.setQuery(this.compiledQuery);
+    this.detailEl.setQuery(this.compiledQuery);
     this.tableEl.refreshFilters();
     this.timelineEl.refresh();
     this.updateFilterCounts();
@@ -291,6 +329,7 @@ export class LooqLiveTail extends HTMLElement {
       const index = this.session.getIndex();
       this.tableEl.setIndex(index);
       this.timelineEl.setIndex(index);
+      this.detailEl.setIndex(index);
       this.indexAttached = true;
       this.applyPredicate(); // in case a filter was toggled before the first tick attached the index
     } else {
@@ -298,6 +337,9 @@ export class LooqLiveTail extends HTMLElement {
       // predicate on arrival (D9) — this just re-derives `displayed` from
       // whatever the index now reports, same as the non-live path.
       this.tableEl.refresh();
+      // The selected entry may have just been evicted — the detail pane has to say
+      // so rather than keep describing an entry that is gone (D6).
+      this.detailEl.refresh();
       this.updateFilterCounts();
     }
     if (this.following) {

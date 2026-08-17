@@ -13,7 +13,9 @@
          explicit override toggle (Auto -> Light -> Dark -> Auto). -->
     <button type="button" id="theme-toggle" class="theme-toggle"></button>
   </div>
-  <p class="sub">file mode</p>
+  <!-- The run mode is stated by the workspace's own topbar row (web/src/components/
+       looq-workspace.ts), which is per-mode content — a hardcoded "file mode" line
+       here was wrong in stdin mode. -->
   <!-- __LOOQ_HINT__ is substituted server-side (crates/looq/src/assets.rs,
        ADR-0007) with already-escaped HTML naming the CLI-supplied path, or left as
        a generic prompt when no path was given. Kept inside a <template> so the raw

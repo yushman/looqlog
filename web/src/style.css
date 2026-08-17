@@ -137,24 +137,208 @@
   --level-fatal-bg: rgba(192, 132, 252, 0.2);
 }
 
+/* ---- viewport-bound workspace (`app-shell` spec, "Three-pane workspace layout",
+   frontend-three-pane-layout design.md D2) --------------------------------------
+   The page itself never scrolls: it is a fixed-height column of [brand topbar,
+   workspace], and every pane inside the workspace scrolls on its own. Panes that
+   scroll carry `min-height: 0` / `min-width: 0` — without them, grid's automatic
+   minimum size refuses to shrink a scroll container below its content and the
+   document grows a scrollbar anyway, which is exactly the failure this layout
+   exists to avoid. */
+html,
+body {
+  height: 100%;
+}
+
 body {
   font-family: var(--font-mono);
-  max-width: 900px;
-  margin: 2rem auto;
-  padding: 0 1rem;
+  margin: 0;
+  padding: 0;
   line-height: 1.5;
   background: var(--bg);
   color: var(--fg);
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+looq-app {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+looq-live-tail,
+looq-workspace {
+  display: block;
+  height: 100%;
+  min-height: 0;
+}
+
+.workspace {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 18rem minmax(0, 1fr) 22rem;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.ws-topbar {
+  grid-column: 1 / -1;
+  border-bottom: 1px solid var(--border);
+}
+
+.ws-topbar-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.3rem 0.75rem;
+}
+
+.ws-mode {
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.ws-topbar-line .status {
+  margin: 0;
+  font-size: 0.85em;
+}
+
+.ws-messages:not(:empty) {
+  padding: 0 0.75rem;
+}
+
+.ws-timeline {
+  grid-column: 1 / -1;
+  border-bottom: 1px solid var(--border);
+  padding: 0.25rem 0.75rem 0.4rem;
+}
+
+.ws-timeline[hidden] {
+  display: none;
+}
+
+.ws-timeline > summary {
+  cursor: pointer;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.ws-rail {
+  grid-row: 3;
+  grid-column: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+}
+
+.ws-rail-secondary {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.ws-center {
+  grid-row: 3;
+  grid-column: 2;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-table-toolbar:not(:empty) {
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.ws-table {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-detail {
+  grid-row: 3;
+  grid-column: 3;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  padding: 0.5rem 0.6rem;
+}
+
+.unopened-prompt {
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.unopened-prompt[hidden] {
+  display: none;
+}
+
+/* D8: a small window stacks instead of squeezing three panes into it. This is a
+   fallback for a narrow desktop window, not a mobile design — and it is the one
+   case where the document is allowed to scroll. The width here must stay in sync
+   with `NARROW_LAYOUT_QUERY` in web/src/components/looq-workspace.ts, which is what
+   makes the rail's sections start collapsed at the same breakpoint. */
+@media (max-width: 1100px) {
+  body {
+    height: auto;
+    min-height: 100dvh;
+    overflow: auto;
+  }
+
+  .workspace {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+  }
+
+  .ws-topbar,
+  .ws-timeline,
+  .ws-rail,
+  .ws-center,
+  .ws-detail {
+    grid-column: 1;
+    grid-row: auto;
+    overflow: visible;
+    border-right: none;
+    border-left: none;
+  }
+
+  .ws-center {
+    height: 70vh;
+  }
+
+  .ws-rail,
+  .ws-detail {
+    border-top: 1px solid var(--border);
+  }
 }
 
 .topbar {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.5rem 0.75rem;
+  padding: 0.35rem 0.75rem;
   background: var(--bg-elevated);
   border-bottom: 2px solid var(--accent);
+}
+
+.topbar h1 {
+  font-size: 1.1em;
+  margin: 0;
 }
 
 .brand-mark {
@@ -180,11 +364,6 @@ h1 {
   height: fit-content;
 }
 
-.sub {
-  color: var(--muted);
-  margin-top: 0;
-}
-
 code {
   background: var(--code-bg);
   padding: 0.1em 0.3em;
@@ -192,16 +371,23 @@ code {
 }
 
 .privacy-note {
-  font-size: 0.9em;
+  font-size: 0.85em;
   color: var(--muted);
+  margin: 0;
 }
 
 .drop-zone {
   border: 2px dashed var(--muted);
   border-radius: 5px;
-  padding: 3rem 1rem;
+  padding: 1.5rem 1rem;
   text-align: center;
-  margin-top: 1rem;
+  margin-top: 0.75rem;
+}
+
+/* In the rail's "open another file" drawer the prompt is compact; in the center
+   pane (nothing opened yet) it stays the roomy target it was. */
+.unopened-prompt .drop-zone {
+  padding: 3rem 1rem;
 }
 
 .drop-zone.drag {
@@ -313,14 +499,6 @@ looq-diagnostics .diagnostics.warning {
   color: var(--muted);
 }
 
-.live-tail-topbar {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
-  margin-bottom: 0.5rem;
-}
-
 .conn-indicator {
   font-weight: bold;
   padding: 0.15em 0.6em;
@@ -353,11 +531,6 @@ looq-diagnostics .diagnostics.warning {
   color: var(--muted);
 }
 
-.mode-indicator {
-  flex-basis: 100%;
-  margin: 0;
-}
-
 .eviction-note {
   color: var(--warn);
 }
@@ -370,100 +543,238 @@ looq-diagnostics .diagnostics.warning {
   color: var(--warn);
 }
 
-/* ---- looq-filter-bar ------------------------------------------------------- */
+/* ---- left rail (looq-filter-bar + the secondary surfaces) ------------------- */
 
-.filter-bar {
-  margin: 0.75rem 0;
-  padding: 0.4rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-}
-
-.filter-rule-note {
-  font-size: 0.8em;
-  color: var(--muted);
-  margin: 0 0 0.5em;
-}
-
-.filter-chips {
+.rail-header {
   display: flex;
-  flex-direction: column;
-  gap: 0.35em;
-}
-
-.filter-field {
-  display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 0.35em;
+  justify-content: space-between;
+  gap: 0.5em;
+  padding: 0.35em 0.6em;
+  border-bottom: 1px solid var(--border);
 }
 
-.filter-field-name {
-  font-weight: bold;
-  font-size: 0.85em;
-  color: var(--muted);
-  min-width: 5em;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.filter-chip {
-  font-size: 0.85em;
-  padding: 0.12em 0.5em;
-  border-radius: 999px;
+.rail-header button {
+  font-size: 0.8em;
+  padding: 0.15em 0.5em;
   border: 1px solid var(--border);
+  border-radius: 4px;
   background: transparent;
+  color: inherit;
   cursor: pointer;
 }
 
-.filter-chip.active {
-  background: var(--accent-bg);
-  border-color: var(--accent);
+/* Every collapsible section — filters and secondary surfaces alike — is a native
+   <details>/<summary> (design.md D3): keyboard operable and screen-reader labelled
+   with no JavaScript, and its `open` attribute is written once, at creation, so a
+   live batch can never reopen a drawer the user just closed. */
+.rail-section {
+  border-bottom: 1px solid var(--border);
+}
+
+.rail-section > summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5em;
+  padding: 0.3em 0.6em;
+  cursor: pointer;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+
+.rail-section-title {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: bold;
+}
+
+.rail-section-state {
+  font-size: 0.95em;
+  color: var(--muted);
+}
+
+.rail-section-state.warning {
+  color: var(--warn);
+  font-weight: bold;
+}
+
+.rail-section.has-active > summary .rail-section-state {
   color: var(--accent-fg);
   font-weight: bold;
 }
 
-.chip-count {
+.rail-section-body {
+  padding: 0.1em 0.6em 0.5em;
+}
+
+.rail-section-body input[type="search"],
+.rail-section-body input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 0.85em;
+  padding: 0.25em 0.4em;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.rail-range-label {
+  display: block;
+  font-size: 0.8em;
   color: var(--muted);
-  font-weight: normal;
+  margin-bottom: 0.25em;
+}
+
+.rail-range-actions {
+  display: flex;
+  gap: 0.35em;
+}
+
+.rail-range-actions button {
+  font-size: 0.8em;
+  padding: 0.15em 0.5em;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.rail-range-error {
+  color: var(--error);
+  font-size: 0.8em;
+  margin: 0.35em 0 0;
+}
+
+.rail-value-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2em;
+}
+
+/* One full-width row per value, count right-aligned — the reference's rail. */
+.rail-value-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+  width: 100%;
+  padding: 0.15em 0.5em;
+  font: inherit;
+  font-size: 0.85em;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: inherit;
+  cursor: pointer;
+}
+
+.rail-value-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-value-count {
+  color: inherit;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-value-row.active {
+  border-color: currentColor;
+  font-weight: bold;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+/* The six level colors are the ones `theming` already defines — no new palette. */
+.rail-level-row.level-trace {
+  background: var(--level-trace-bg);
+  color: var(--level-trace);
+}
+
+.rail-level-row.level-debug {
+  background: var(--level-debug-bg);
+  color: var(--level-debug);
+}
+
+.rail-level-row.level-info {
+  background: var(--level-info-bg);
+  color: var(--level-info);
+}
+
+.rail-level-row.level-warn,
+.rail-level-row.level-warning {
+  background: var(--level-warn-bg);
+  color: var(--level-warn);
+}
+
+.rail-level-row.level-error {
+  background: var(--level-error-bg);
+  color: var(--level-error);
+}
+
+.rail-level-row.level-fatal,
+.rail-level-row.level-critical {
+  background: var(--level-fatal-bg);
+  color: var(--level-fatal);
+}
+
+.filter-rule-note {
+  font-size: 0.75em;
+  color: var(--muted);
+  margin: 0.4em 0 0;
 }
 
 .filter-typed-entry {
-  display: inline-flex;
-  gap: 0.25em;
-}
-
-.filter-typed-entry input {
-  font-size: 0.85em;
-  padding: 0.1em 0.4em;
-}
-
-.filter-search-row {
   display: flex;
-  gap: 0.5em;
-  margin-top: 0.5em;
+  gap: 0.25em;
+  margin-bottom: 0.35em;
 }
 
-.filter-search-row input[type="search"] {
-  flex: 1;
-  padding: 0.3em 0.5em;
+.filter-typed-entry button {
+  font-size: 0.8em;
+  padding: 0.15em 0.5em;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 .filter-query-error {
   color: var(--error);
-  font-size: 0.85em;
+  font-size: 0.8em;
   margin: 0.35em 0 0;
 }
 
 .filter-count {
   font-size: 0.85em;
   color: var(--muted);
-  margin: 0.35em 0 0;
+  margin: 0;
 }
 
 .filter-count-empty {
   color: var(--warn);
   font-weight: bold;
+}
+
+/* Keyboard reachability is a spec requirement, so the focus ring is explicit
+   rather than left to whatever the UA default happens to be against these
+   backgrounds (`app-shell`/`filtering` keyboard pass). */
+.rail-value-row:focus-visible,
+.rail-section > summary:focus-visible,
+.rail-section-body input:focus-visible,
+.rail-section-body button:focus-visible,
+.rail-header button:focus-visible,
+.ws-timeline > summary:focus-visible,
+.entry-table-viewport:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Search-match highlighting: a plain span, not <mark> — see highlightHtml's doc
@@ -477,13 +788,6 @@ looq-diagnostics .diagnostics.warning {
 .hash-notice {
   color: var(--warn);
   font-size: 0.85em;
-}
-
-.share-link-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75em;
-  margin: 0.5rem 0;
 }
 
 .share-caveat {
@@ -509,12 +813,19 @@ looq-diagnostics .diagnostics.warning {
   font-size: 0.85em;
 }
 
+.timeline-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+}
+
 .timeline-chart {
-  min-height: 140px;
+  min-height: 110px;
 }
 
 .timeline-controls {
-  margin-top: 0.25rem;
+  margin-left: auto;
 }
 
 /* ---- looq-entry-table ------------------------------------------------------ */
@@ -527,7 +838,13 @@ looq-diagnostics .diagnostics.warning {
 .entry-table-header,
 .entry-row {
   display: grid;
-  grid-template-columns: 3.5rem 14rem 6rem 1fr;
+  /* Fixed widths, not content-based: every row is its own grid, so `max-content`
+     columns would size per row and the columns would not line up. The timestamp
+     column fits RFC 3339 with milliseconds minus the redundant UTC suffix rows no
+     longer render (`2026-08-17T10:00:01.600`, see `rowTimestamp` in
+     looq-entry-table.ts); anything longer truncates (see `.col-timestamp` below)
+     instead of running under the level badge. */
+  grid-template-columns: 3rem 12.5rem 2.5rem minmax(0, 1fr);
   gap: 0.5em;
   align-items: baseline;
 }
@@ -540,8 +857,34 @@ looq-diagnostics .diagnostics.warning {
   padding: 0.25em 0.5em;
 }
 
+/* The table fills its pane instead of living in a fixed 480px box inside a
+   scrolling page (frontend-three-pane-layout task 1.3). The virtual scroller reads
+   `clientHeight` at render time (`looq-entry-table.ts`), so it follows whatever
+   height the layout gives it with no code change; `min-height: 0` is what lets the
+   flex item actually shrink to the pane rather than to its content. */
+looq-entry-table {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+looq-entry-table[hidden] {
+  display: none;
+}
+
+.entry-table-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 0 0.5rem 0.5rem;
+}
+
 .entry-table-viewport {
-  height: 480px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -579,9 +922,11 @@ looq-diagnostics .diagnostics.warning {
   background: var(--accent-bg);
 }
 
-.entry-row .col-message {
+.entry-row .col-message,
+.entry-row .col-timestamp {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .absent {
@@ -635,16 +980,22 @@ looq-diagnostics .diagnostics.warning {
   color: var(--warn);
 }
 
-.entry-detail-panel {
-  margin-top: 0.75rem;
-  padding: 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  font-size: 0.9em;
+/* ---- looq-entry-detail (the right pane) ------------------------------------ */
+
+looq-entry-detail {
+  display: block;
+  font-size: 0.85em;
 }
 
-.detail-close {
-  float: right;
+.detail-empty {
+  color: var(--muted);
+  font-style: italic;
+  text-align: center;
+  margin-top: 40%;
+}
+
+.detail-evicted {
+  color: var(--warn);
 }
 
 .detail-core {

@@ -8,11 +8,16 @@
 // Replaces the provisional table from `browser-app-shell` (task 3.8): that one
 // rendered every entry into the DOM up to a 500-row cap; this one is bounded by
 // the viewport, not the dataset, at any size.
+//
+// The detail view is no longer part of this component (`frontend-three-pane-layout`
+// D6): the table holds the selection and emits it as `selection-change`, and the
+// workspace's right pane (`looq-entry-detail`) renders it — so inspecting an entry
+// cannot reflow the rows around it.
 
 import type { EntryIndex } from "../entry-index";
 import { findMatchRanges, type CompiledQuery } from "../predicate";
 import type { TimeRange } from "../time-range";
-import type { EntryDto, FieldValueDto } from "../wasm-types";
+import type { EntryDto } from "../wasm-types";
 
 /** Uniform row height in CSS pixels — what makes virtual scrolling arithmetic
  * (index * height) rather than a measurement pass (D6). */
@@ -41,7 +46,6 @@ export class LooqEntryTable extends HTMLElement {
   private viewportEl!: HTMLDivElement;
   private spacerEl!: HTMLDivElement;
   private rowsEl!: HTMLDivElement;
-  private detailEl!: HTMLDivElement;
 
   connectedCallback(): void {
     this.innerHTML = `
@@ -62,7 +66,6 @@ export class LooqEntryTable extends HTMLElement {
             <div class="entry-table-rows" id="rows"></div>
           </div>
         </div>
-        <div class="entry-detail-panel" id="detail" hidden></div>
       </div>
     `;
     this.summaryEl = this.querySelector("#table-summary") as HTMLParagraphElement;
@@ -70,7 +73,6 @@ export class LooqEntryTable extends HTMLElement {
     this.viewportEl = this.querySelector("#viewport") as HTMLDivElement;
     this.spacerEl = this.querySelector("#spacer") as HTMLDivElement;
     this.rowsEl = this.querySelector("#rows") as HTMLDivElement;
-    this.detailEl = this.querySelector("#detail") as HTMLDivElement;
 
     this.viewportEl.addEventListener("scroll", () => {
       this.renderVisibleRows();
@@ -82,12 +84,26 @@ export class LooqEntryTable extends HTMLElement {
       this.dispatchEvent(new CustomEvent<number>("viewport-scroll", { detail: this.distanceFromBottom() }));
     });
     this.rowsEl.addEventListener("click", (event) => this.handleRowClick(event));
-    this.detailEl.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement).closest("[data-close-detail]")) {
-        this.selectedOrdinal = null;
-        this.renderDetail();
-      }
-    });
+    // The viewport's height now comes from the layout, not from a fixed rule
+    // (`app-shell` spec, "The table uses the height it is given"): a taller window
+    // has to render more rows, and nothing else would trigger that re-render in
+    // file mode, where no live tick is running.
+    window.addEventListener("resize", this.handleResize);
+  }
+
+  disconnectedCallback(): void {
+    window.removeEventListener("resize", this.handleResize);
+  }
+
+  private readonly handleResize = (): void => {
+    this.renderVisibleRows();
+  };
+
+  /** The selected entry's identity (D6: an ordinal, not a row index), or `null`.
+   * The detail pane is a sibling in the workspace, not a child of this component,
+   * so selection leaves here as an event and comes back as nothing. */
+  private emitSelection(): void {
+    this.dispatchEvent(new CustomEvent<number | null>("selection-change", { detail: this.selectedOrdinal }));
   }
 
   /** A new dataset (new file, or a fresh stream). Resets scroll and selection. */
@@ -97,6 +113,7 @@ export class LooqEntryTable extends HTMLElement {
     this.recomputeDisplayed();
     this.viewportEl.scrollTop = 0;
     this.renderVisibleRows();
+    this.emitSelection();
   }
 
   /** The shell narrowed or cleared the active range (D7). Resets scroll — this is
@@ -114,7 +131,6 @@ export class LooqEntryTable extends HTMLElement {
   setQuery(compiled: CompiledQuery): void {
     this.compiledQuery = compiled;
     this.renderVisibleRows();
-    this.renderDetail();
   }
 
   /** The shell's predicate (chips/search, `filtering-and-search`) changed. Same
@@ -192,7 +208,6 @@ export class LooqEntryTable extends HTMLElement {
       this.displayed = this.index.entriesInInputOrder();
     }
     this.renderSummary();
-    this.renderDetail(); // selected entry may have scrolled out of the index (eviction)
   }
 
   private renderSummary(): void {
@@ -249,7 +264,7 @@ export class LooqEntryTable extends HTMLElement {
 
   private renderRowHtml(entry: EntryDto): string {
     const timestampHtml = entry.timestamp
-      ? escapeHtml(entry.timestamp)
+      ? `<span title="${escapeHtml(entry.timestamp)}">${escapeHtml(rowTimestamp(entry.timestamp))}</span>`
       : `<span class="absent" title="no timestamp extracted">no timestamp</span>`;
     // Visible text is compressed to the level's first letter (all six of
     // TRACE/DEBUG/INFO/WARN/ERROR/FATAL are already unique on that letter); the
@@ -284,55 +299,7 @@ export class LooqEntryTable extends HTMLElement {
     const ordinal = Number(rowEl.dataset.ordinal);
     this.selectedOrdinal = this.selectedOrdinal === ordinal ? null : ordinal;
     this.renderVisibleRows(); // to toggle the `.selected` class
-    this.renderDetail();
-  }
-
-  private renderDetail(): void {
-    if (this.selectedOrdinal === null) {
-      this.detailEl.hidden = true;
-      return;
-    }
-    const entry = this.index?.getByOrdinal(this.selectedOrdinal);
-    if (!entry) {
-      this.detailEl.hidden = false;
-      this.detailEl.innerHTML = `
-        <button type="button" data-close-detail class="detail-close">Close</button>
-        <p class="provisional-note">This entry is no longer retained (evicted).</p>`;
-      return;
-    }
-    const fieldRows = Object.entries(entry.fields)
-      .map(([key, value]) => `<tr><th>${escapeHtml(key)}</th><td>${renderFieldValue(value)}</td></tr>`)
-      .join("");
-    this.detailEl.hidden = false;
-    this.detailEl.innerHTML = `
-      <button type="button" data-close-detail class="detail-close">Close</button>
-      <dl class="detail-core">
-        <dt>ordinal</dt><dd>${entry.ordinal}</dd>
-        <dt>timestamp</dt><dd>${entry.timestamp ? escapeHtml(entry.timestamp) + " (UTC)" : "no timestamp extracted"}</dd>
-        <dt>level</dt><dd>${entry.level ? escapeHtml(entry.level) : "no level extracted"}</dd>
-      </dl>
-      <p class="detail-message-label">message</p>
-      <pre class="detail-message">${highlightHtml(entry.message, this.compiledQuery)}</pre>
-      ${fieldRows ? `<p class="detail-fields-label">fields</p><table class="detail-fields">${fieldRows}</table>` : ""}
-    `;
-  }
-}
-
-function renderFieldValue(value: FieldValueDto): string {
-  switch (value.kind) {
-    case "string":
-      return escapeHtml(value.value);
-    case "number":
-      return escapeHtml(value.value);
-    case "bool":
-      return String(value.value);
-    case "null":
-      return `<span class="absent">null</span>`;
-    case "json":
-      // Nested JSON is kept as raw text (Entry::FieldValue::Json,
-      // crates/looq-core/src/entry.rs) rather than flattened — shown verbatim in
-      // a <pre> so it stays readable (`entry-table` spec, "Nested JSON is readable").
-      return `<pre class="detail-json">${escapeHtml(value.value)}</pre>`;
+    this.emitSelection();
   }
 }
 
@@ -350,6 +317,17 @@ function lowerBoundOrdinal(displayed: readonly EntryDto[], ordinal: number): num
     }
   }
   return lo;
+}
+
+/** Drops the zone suffix a row does not need: `Entry::timestamp` is a
+ * `DateTime<Utc>` in `looq-core`, so every value the parser emits ends in `+00:00`
+ * (or `Z`) and the column header already says UTC — six characters repeated on
+ * every row, taking width from the message column. Only that exactly-redundant
+ * suffix is stripped; any other offset stays visible rather than being silently
+ * dropped, and the full RFC 3339 string is kept as the cell's `title` and in the
+ * detail pane. */
+function rowTimestamp(timestamp: string): string {
+  return timestamp.replace(/(\+00:00|Z)$/, "");
 }
 
 function escapeHtml(input: string): string {
