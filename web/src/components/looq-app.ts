@@ -507,7 +507,7 @@ export class LooqApp extends HTMLElement {
       this.blankLines = result.blankLines;
       this.totalLines = result.totalLines;
 
-      this.detectionEl.setDetection(result.detection);
+      this.detectionEl.setDetection(result.detection, result.format ?? null);
       this.diagnosticsEl.setDiagnostics(result.diagnostics, result.entriesEmitted);
 
       const index = new EntryIndex();

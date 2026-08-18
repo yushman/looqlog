@@ -57,6 +57,10 @@ export class LooqTimeline extends HTMLElement {
   private plot: uPlot | null = null;
   private activeRange: TimeRange | null = null;
   private showingFullSpan = false;
+  /** Width the current canvas was built at, and the pending resize frame — see
+   * `handleResize`. */
+  private lastChartWidth = 0;
+  private resizeFrame: number | null = null;
 
   private chartEl!: HTMLDivElement;
   private summaryEl!: HTMLParagraphElement;
@@ -87,6 +91,8 @@ export class LooqTimeline extends HTMLElement {
     this.outlierEl = this.querySelector("#timeline-outlier") as HTMLParagraphElement;
     this.clearBtn = this.querySelector("#clear-range") as HTMLButtonElement;
     this.zoomOutBtn = this.querySelector("#zoom-out-btn") as HTMLButtonElement;
+
+    window.addEventListener("resize", this.handleResize);
 
     this.clearBtn.addEventListener("click", () => {
       this.dispatchEvent(new CustomEvent<TimeRange | null>("range-change", { detail: null }));
@@ -121,7 +127,34 @@ export class LooqTimeline extends HTMLElement {
     this.plot = null;
   }
 
+  /** uPlot takes its width as a number at construction time, so a canvas drawn
+   * into a 1256px pane keeps that width in an 800px one — the chart simply
+   * overflows or leaves a gap. Nothing else re-renders the timeline in file mode
+   * (no live tick), so the window is what has to say when the pane changed. A
+   * redraw is a full bucket recompute, so it only happens when the available
+   * width actually changed, and at most once per frame. */
+  private readonly handleResize = (): void => {
+    if (this.resizeFrame !== null) {
+      return;
+    }
+    this.resizeFrame = requestAnimationFrame(() => {
+      this.resizeFrame = null;
+      if (this.availableChartWidth() !== this.lastChartWidth) {
+        this.render();
+      }
+    });
+  };
+
+  private availableChartWidth(): number {
+    return Math.max(this.chartEl.clientWidth || MIN_CHART_WIDTH, MIN_CHART_WIDTH);
+  }
+
   disconnectedCallback(): void {
+    window.removeEventListener("resize", this.handleResize);
+    if (this.resizeFrame !== null) {
+      cancelAnimationFrame(this.resizeFrame);
+      this.resizeFrame = null;
+    }
     this.destroyPlot();
   }
 
@@ -196,7 +229,8 @@ export class LooqTimeline extends HTMLElement {
 
   private drawPlot(data: uPlot.AlignedData, bucketWidthMs: number): void {
     this.destroyPlot();
-    const width = Math.max(this.chartEl.clientWidth || MIN_CHART_WIDTH, MIN_CHART_WIDTH);
+    const width = this.availableChartWidth();
+    this.lastChartWidth = width;
     // Read the accent color from the token at render time rather than hardcoding
     // its hex, so a future palette change (`theming` spec) doesn't require an edit
     // here too (design.md D4).

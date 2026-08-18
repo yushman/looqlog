@@ -1946,16 +1946,41 @@ code, not ahead of it. It names the permitted rewrites (entry, selected state, a
 forbids the wholesale rebuild, so the next person to touch `renderVisibleRows` has the constraint in
 front of them. `openspec validate --specs --strict`: 20 passed.
 
+## 2026-08-18 — two UI defects off the Ideas list: timeline width, and "detecting…" forever
+
+Both were parked during `frontend-three-pane-layout` rather than fixed; both are small, and both are
+in code the layout change made more visible. Bugfixes, so no proposal.
+
+**Timeline did not follow the window.** uPlot takes its width as a number at construction, so a
+canvas built in a 1256px pane kept that width when the pane became 800px or 1576px — it overflowed or
+left a gap, and nothing re-rendered it in file mode, where no live tick runs. `looq-timeline` now
+listens for `resize` and redraws, but only when the *available* width actually changed and at most
+once per animation frame: a redraw here is a full bucket recompute, unlike the entry table's cheap
+row pass, so firing it on every resize event would be wasteful. `lastChartWidth` is recorded in
+`drawPlot`, the listener is removed and any pending frame cancelled in `disconnectedCallback`. The
+range-selection overlay survives, because `drawPlot` already ends with `applySelectionOverlay()`.
+
+Measured: 1280 → canvas 1256 = pane 1256; 1600 → 1576 = 1576; 1024 → 1000 = 1000, no overflow past
+the pane and no horizontal page scrollbar at any of the three.
+
+**"detecting…" forever with `#format=`.** An explicit override skips detection entirely, so the WASM
+side returns `null` and the panel said "Detecting format..." for the life of the session — describing
+work that was not happening. It was survivable when the text sat inside a panel; after the redesign
+that line is the only thing visible while the section is collapsed. `setDetection` now takes the
+active format alongside the detection result (both shells already had it: `result.format` in file
+mode, `summary.format` in live mode), and with a `null` detection plus a known format the summary
+reads `json (set explicitly)` and the body explains that auto-detection did not run, that there is no
+match fraction, and how to get detection back. A `null` detection with no format still reads
+"detecting…", which is the case where detection really is pending.
+
+Verified against the real binary at `#format=json`: summary `json (set explicitly)`, 2000 rows
+parsed. `npm run test` 55/55, `npm run typecheck` clean, `cargo test --workspace` 103/0, clippy clean,
+assets byte-identical across two rebuilds.
+
 ## Ideas for later
 
-- Give `looq-detection`'s collapsed summary something better than "detecting…" when a `#format=`
-  override skipped detection entirely (`crates/looq-wasm/src/lib.rs`: detection is `null` in that
-  case). Pre-existing — the old panel said "Detecting format..." forever too — but a summary line
-  that is now the *only* thing visible when collapsed makes it more noticeable.
 - Resizable rail/detail panes, deliberately deferred by `frontend-three-pane-layout`'s Non-Goals
   rather than half-built; the widths are fixed at 18rem/22rem today.
-- Re-render the timeline on window resize (its `uPlot` canvas width is chosen once, at draw time),
-  now that the layout is width-responsive; out of scope for the change that introduced the layout.
 - A disk-backed or larger in-page benchmark harness (median/stddev over many runs,
   automated regression check) belongs with `log-parsing-core`, once there's a real
   parser worth protecting from regressions.

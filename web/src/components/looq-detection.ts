@@ -44,25 +44,45 @@ export class LooqDetection extends HTMLElement {
     this.detailsEl = this.querySelector("#detection-section") as HTMLDetailsElement;
     this.stateEl = this.querySelector("#detection-state") as HTMLElement;
     this.bodyEl = this.querySelector("#detection-body") as HTMLElement;
-    this.render(null);
+    this.render(null, null);
   }
 
-  setDetection(detection: DetectionResultDto | null): void {
-    this.render(detection);
+  /** `activeFormat`: the format the parser is actually using, which is the only
+   * thing there is to report when `detection` is `null` because a `#format=`
+   * override skipped detection entirely. */
+  setDetection(detection: DetectionResultDto | null, activeFormat: string | null = null): void {
+    this.render(detection, activeFormat);
   }
 
-  private render(detection: DetectionResultDto | null): void {
-    const key = detection === null ? "null" : `${detection.format}|${detection.matchFraction}|${detection.outcome}`;
+  private render(detection: DetectionResultDto | null, activeFormat: string | null): void {
+    const key =
+      detection === null
+        ? `null|${activeFormat ?? ""}`
+        : `${detection.format}|${detection.matchFraction}|${detection.outcome}`;
     if (key === this.lastKey) {
       return;
     }
     this.lastKey = key;
 
     if (detection === null) {
+      this.classList.remove("fallback", "low-confidence");
+      // An explicit override means nothing was ever sampled, so there is no match
+      // fraction and never will be — saying "detecting…" forever describes work
+      // that is not happening. Without an override, detection genuinely is still
+      // pending.
+      if (activeFormat !== null) {
+        this.stateEl.textContent = `${activeFormat} (set explicitly)`;
+        this.stateEl.className = "rail-section-state";
+        this.bodyEl.innerHTML = `<p class="detection">
+             Format was set explicitly to <strong>${escapeHtml(activeFormat)}</strong>, so auto-detection
+             did not run and there is no match fraction to report. Remove the
+             <code>#format=</code> override to have the format detected from the file.
+           </p>`;
+        return;
+      }
       this.stateEl.textContent = "detecting…";
       this.stateEl.className = "rail-section-state";
       this.bodyEl.innerHTML = `<p class="detection">Detecting format...</p>`;
-      this.classList.remove("fallback", "low-confidence");
       return;
     }
 

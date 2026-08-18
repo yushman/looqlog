@@ -301,7 +301,7 @@ export class LooqLiveTail extends HTMLElement {
     }
     this.session.refreshSummary(); // also forces D5's detection-hold timeout
     const summary = this.session.getSummary();
-    this.detectionEl.setDetection(summary.detection);
+    this.detectionEl.setDetection(summary.detection, summary.format ?? null);
     this.diagnosticsEl.setDiagnostics(summary.diagnostics, summary.entriesEmitted, true);
     // Chips need the cumulative field inventory (`filtering` spec, "Filter chips
     // come from the field inventory") — refreshed on the same cadence as
