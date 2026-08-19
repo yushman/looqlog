@@ -15,11 +15,24 @@
 //   q=<text>                     -- raw search box text (may start with `re:`)
 //   format=<json|logfmt|plain>   -- format override, `log-parsing-core` spec
 //   tz=<minutes>                 -- fixed UTC offset override, minutes east
+//   cols=<ordinal>,<timestamp>,<level>
+//                                -- entry-table column widths in `rem`, only the
+//                                   directly resizable columns; the message column
+//                                   is derived (`minmax(0, 1fr)`) and so has no
+//                                   place in the grammar (design D1/D6)
+//   panes=<rail|detail|rail+detail>
+//                                -- which workspace side panes are COLLAPSED
+//                                   (collapsible-workspace-panes design D6), so the
+//                                   default — both expanded — is absent from the
+//                                   hash entirely, same principle as default column
+//                                   widths
 //
 // All keys are optional; an absent key means "no constraint on that axis", not
 // "empty". Unknown keys and unparsable values are reported by `decodeHash` rather
 // than silently dropped (`url-state` spec, "A malformed hash is reported").
 
+import { DEFAULT_COLUMN_WIDTHS, encodeColumnWidths, parseColumnWidths, type ColumnWidths } from "./column-widths";
+import { encodeCollapsedPanes, parseCollapsedPanes, type CollapsedPanes, type CollapsiblePane } from "./panes";
 import type { TimeRange } from "./time-range";
 
 export interface HashState {
@@ -29,6 +42,11 @@ export interface HashState {
   query: string;
   formatOverride: string | null;
   tzOffsetMinutes: number | null;
+  /** Entry-table column widths in `rem`. Encoded only when they differ from the
+   * defaults, so an untouched table leaves the link exactly as it was. */
+  columnWidths: ColumnWidths;
+  /** Which side panes are collapsed. Empty — the default — encodes to nothing. */
+  collapsedPanes: CollapsedPanes;
 }
 
 export const EMPTY_HASH_STATE: HashState = {
@@ -37,9 +55,11 @@ export const EMPTY_HASH_STATE: HashState = {
   query: "",
   formatOverride: null,
   tzOffsetMinutes: null,
+  columnWidths: DEFAULT_COLUMN_WIDTHS,
+  collapsedPanes: new Set(),
 };
 
-const KNOWN_KEYS = new Set(["range", "filter", "q", "format", "tz"]);
+const KNOWN_KEYS = new Set(["range", "filter", "q", "format", "tz", "cols", "panes"]);
 
 export function encodeHash(state: HashState): string {
   const params = new URLSearchParams();
@@ -60,6 +80,14 @@ export function encodeHash(state: HashState): string {
   if (state.tzOffsetMinutes !== null) {
     params.set("tz", String(state.tzOffsetMinutes));
   }
+  const cols = encodeColumnWidths(state.columnWidths);
+  if (cols !== null) {
+    params.set("cols", cols);
+  }
+  const panes = encodeCollapsedPanes(state.collapsedPanes);
+  if (panes !== null) {
+    params.set("panes", panes);
+  }
   return params.toString();
 }
 
@@ -69,6 +97,21 @@ export interface DecodedHash {
   query: string;
   formatOverride: string | null;
   tzOffsetMinutes: number | null;
+  /** Always usable: a malformed or out-of-range `cols=` yields defaults/clamped
+   * values here and an entry in `columnWidthErrors`, never a failure — a width is
+   * a presentation preference, not data (`url-state` spec, "A bad column width
+   * never blocks the log"). */
+  columnWidths: ColumnWidths;
+  /** What `cols=` asked for and could not get verbatim, for the same notice the
+   * other unapplied hash parts appear in. */
+  columnWidthErrors: string[];
+  /** Always usable, for the same reason as `columnWidths`: an unknown or
+   * unparsable `panes=` yields the panes it could read (possibly none) plus an
+   * entry in `collapsedPaneErrors`, never a failure (`url-state` spec, "An unknown
+   * pane name never blocks the log"). */
+  collapsedPanes: Set<CollapsiblePane>;
+  /** What `panes=` named and could not be applied, for the same notice. */
+  collapsedPaneErrors: string[];
   /** Hash keys this grammar doesn't recognise at all (`url-state` spec, "Unknown
    * key") — reported, never silently ignored. */
   unknownKeys: string[];
@@ -124,8 +167,23 @@ export function decodeHash(hash: string): DecodedHash {
   const formatOverride = params.get("format");
   const tzRaw = params.get("tz");
   const tzOffsetMinutes = tzRaw !== null && Number.isFinite(Number(tzRaw)) ? Number(tzRaw) : null;
+  const { widths: columnWidths, errors: columnWidthErrors } = parseColumnWidths(params.get("cols"));
+  const { panes: collapsedPanes, errors: collapsedPaneErrors } = parseCollapsedPanes(params.get("panes"));
 
-  return { range, fieldFilters, query, formatOverride, tzOffsetMinutes, unknownKeys, rangeError, malformedFilterCount };
+  return {
+    range,
+    fieldFilters,
+    query,
+    formatOverride,
+    tzOffsetMinutes,
+    columnWidths,
+    columnWidthErrors,
+    collapsedPanes,
+    collapsedPaneErrors,
+    unknownKeys,
+    rangeError,
+    malformedFilterCount,
+  };
 }
 
 /**

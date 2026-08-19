@@ -176,11 +176,42 @@ looq-workspace {
   min-height: 0;
 }
 
+/* Collapse is a change to the grid template, never `display: none` on the pane
+   (collapsible-workspace-panes design D2): a collapsed pane keeps its box, so a
+   toggle does not destroy and rebuild it. The two widths are custom properties so
+   `[data-collapsed~=...]` only has to shrink a track — to the strip's width, not
+   to zero (design D1): the strip carries the pane's name and the only control that
+   brings it back, so it has to stay on screen. The table's gain is
+   `pane − strip`. */
 .workspace {
+  --ws-strip-width: 2rem;
+  --ws-rail-width: 18rem;
+  --ws-detail-width: 22rem;
   height: 100%;
   display: grid;
-  grid-template-columns: 18rem minmax(0, 1fr) 22rem;
+  grid-template-columns: var(--ws-rail-width) minmax(0, 1fr) var(--ws-detail-width);
   grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.workspace[data-collapsed~="rail"] {
+  --ws-rail-width: var(--ws-strip-width);
+}
+
+.workspace[data-collapsed~="detail"] {
+  --ws-detail-width: var(--ws-strip-width);
+}
+
+/* `visibility: hidden` is what takes the collapsed pane's *content* out of the tab
+   order — a narrow pane still contains tabbable controls otherwise, and tabbing
+   into an invisible filter list is the accessibility form of the bug this exists to
+   prevent (design D2). Unlike `display: none` it leaves the box, and its scroll
+   offset, in place. It is scoped to `.ws-pane-content` and never the whole pane:
+   the strip inside the same pane must stay visible and focusable, because it is now
+   the only way back (design D1). */
+.workspace[data-collapsed~="rail"] .ws-rail > .ws-pane-content,
+.workspace[data-collapsed~="detail"] .ws-detail > .ws-pane-content {
+  visibility: hidden;
+  padding: 0;
 }
 
 .ws-topbar {
@@ -188,7 +219,100 @@ looq-workspace {
   border-bottom: 1px solid var(--border);
 }
 
+/* The collapse control belongs to the pane it collapses (design D1, reversed from
+   a topbar pair): expanded, the strip is the pane's header row; collapsed, the pane
+   *is* the strip and the label turns on its side. */
+.ws-pane-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.4rem;
+  min-width: 0;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.ws-detail > .ws-pane-strip {
+  flex-direction: row-reverse;
+}
+
+.ws-pane-strip-label {
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Real, selectable text turned on its side — not an image and not a rotated
+   background — so it survives zoom, text selection and assistive technology
+   (design D1). */
+.workspace[data-collapsed~="rail"] .ws-rail,
+.workspace[data-collapsed~="detail"] .ws-detail {
+  background: var(--bg-elevated);
+}
+
+.workspace[data-collapsed~="rail"] .ws-rail > .ws-pane-strip,
+.workspace[data-collapsed~="detail"] .ws-detail > .ws-pane-strip {
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-bottom: none;
+}
+
+.workspace[data-collapsed~="rail"] .ws-rail .ws-pane-strip-label,
+.workspace[data-collapsed~="detail"] .ws-detail .ws-pane-strip-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+
+.ws-pane-toggle {
+  flex: 0 0 auto;
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.1rem 0.25rem;
+  cursor: pointer;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.ws-pane-toggle:hover {
+  color: var(--fg);
+}
+
+/* One chevron glyph, mirrored so it always points where the click sends the pane:
+   the rail folds left and reopens right, the detail pane the other way round. */
+.ws-rail .ws-pane-toggle[aria-expanded="false"] .ws-pane-toggle-icon,
+.ws-detail .ws-pane-toggle[aria-expanded="true"] .ws-pane-toggle-icon {
+  transform: scaleX(-1);
+}
+
+.ws-pane-toggle.attention {
+  border-color: var(--level-warn);
+  color: var(--level-warn);
+}
+
+.ws-pane-attention {
+  font-size: 0.75em;
+  font-weight: bold;
+  line-height: 1;
+  color: var(--level-warn);
+}
+
+.ws-pane-attention[hidden] {
+  display: none;
+}
+
 .ws-topbar-line {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
@@ -230,13 +354,24 @@ looq-workspace {
   color: var(--muted);
 }
 
+/* The pane is a column of [strip, content]; the content is what scrolls, so the
+   strip stays put and the scroll offset survives a collapse (design D1/D2). */
 .ws-rail {
   grid-row: 3;
   grid-column: 1;
   min-height: 0;
   min-width: 0;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-right: 1px solid var(--border);
+}
+
+.ws-pane-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
 }
 
 .ws-rail-secondary {
@@ -271,8 +406,13 @@ looq-workspace {
   grid-column: 3;
   min-height: 0;
   min-width: 0;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-left: 1px solid var(--border);
+}
+
+.ws-detail > .ws-pane-content {
   padding: 0.5rem 0.6rem;
 }
 
@@ -287,10 +427,22 @@ looq-workspace {
 
 /* D8: a small window stacks instead of squeezing three panes into it. This is a
    fallback for a narrow desktop window, not a mobile design — and it is the one
-   case where the document is allowed to scroll. The width here must stay in sync
-   with `NARROW_LAYOUT_QUERY` in web/src/components/looq-workspace.ts, which is what
-   makes the rail's sections start collapsed at the same breakpoint. */
+   case where the document is allowed to scroll.
+   The width in the media query below is the ONLY definition of it in the codebase
+   (collapsible-workspace-panes design D5): the media query publishes it as
+   `--narrow-layout`, and `isNarrowLayout()` in
+   web/src/components/looq-workspace.ts reads that property instead of repeating
+   the number — which is what makes the rail's sections start collapsed at exactly
+   the same breakpoint the layout stacks at. Change it here and both follow. */
+:root {
+  --narrow-layout: 0;
+}
+
 @media (max-width: 1100px) {
+  :root {
+    --narrow-layout: 1;
+  }
+
   body {
     height: auto;
     min-height: 100dvh;
@@ -307,7 +459,8 @@ looq-workspace {
   .ws-timeline,
   .ws-rail,
   .ws-center,
-  .ws-detail {
+  .ws-detail,
+  .ws-pane-content {
     grid-column: 1;
     grid-row: auto;
     overflow: visible;
@@ -322,6 +475,34 @@ looq-workspace {
   .ws-rail,
   .ws-detail {
     border-top: 1px solid var(--border);
+  }
+
+  /* Stacked, there is no side column to shrink to a strip, and a label turned on
+     its side inside a full-width row would be nonsense. So the strip stays — it is
+     still the only way back — but as the horizontal bar the block collapses to,
+     and the block's *content* is removed outright rather than left as a screenful
+     of hidden space the document would still scroll past (design D5, revisited for
+     D1's strip). `display: none` is safe here in a way it is not above the
+     breakpoint: stacked, the document scrolls and the panes are `overflow: visible`,
+     so there is no pane scroll offset for it to discard. */
+  .workspace[data-collapsed~="rail"] .ws-rail > .ws-pane-content,
+  .workspace[data-collapsed~="detail"] .ws-detail > .ws-pane-content {
+    display: none;
+  }
+
+  .workspace[data-collapsed~="rail"] .ws-rail > .ws-pane-strip {
+    flex-direction: row;
+    padding: 0.25rem 0.4rem;
+  }
+
+  .workspace[data-collapsed~="detail"] .ws-detail > .ws-pane-strip {
+    flex-direction: row-reverse;
+    padding: 0.25rem 0.4rem;
+  }
+
+  .workspace[data-collapsed~="rail"] .ws-rail .ws-pane-strip-label,
+  .workspace[data-collapsed~="detail"] .ws-detail .ws-pane-strip-label {
+    writing-mode: horizontal-tb;
   }
 }
 
@@ -772,6 +953,7 @@ looq-diagnostics .diagnostics.warning {
 .rail-section-body button:focus-visible,
 .rail-header button:focus-visible,
 .ws-timeline > summary:focus-visible,
+.ws-pane-toggle:focus-visible,
 .entry-table-viewport:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -838,13 +1020,27 @@ looq-diagnostics .diagnostics.warning {
 .entry-table-header,
 .entry-row {
   display: grid;
-  /* Fixed widths, not content-based: every row is its own grid, so `max-content`
-     columns would size per row and the columns would not line up. The timestamp
-     column fits RFC 3339 with milliseconds minus the redundant UTC suffix rows no
-     longer render (`2026-08-17T10:00:01.600`, see `rowTimestamp` in
+  /* One shared template, not content-based: every row is its own grid, so
+     `max-content` columns would size per row and the columns would not line up.
+     The three widths are custom properties `looq-entry-table.ts` rewrites on a
+     single `.entry-table-wrap` rule when the user drags a header handle (design
+     D1) — one write, every row realigned, because every row reads the same
+     variables. The defaults here are the widths the table shipped with before it
+     was resizable, and they are also what applies if the generated stylesheet
+     never gets created.
+
+     The message column stays `minmax(0, 1fr)` and is not directly resizable: it
+     absorbs whatever the other three leave, so a row always exactly fills the
+     viewport and there is no horizontal scrollbar to reconcile. The timestamp
+     column's default fits RFC 3339 with milliseconds minus the redundant UTC
+     suffix rows no longer render (`2026-08-17T10:00:01.600`, see `rowTimestamp` in
      looq-entry-table.ts); anything longer truncates (see `.col-timestamp` below)
      instead of running under the level badge. */
-  grid-template-columns: 3rem 12.5rem 2.5rem minmax(0, 1fr);
+  grid-template-columns:
+    var(--col-ordinal, 3rem)
+    var(--col-timestamp, 12.5rem)
+    var(--col-level, 2.5rem)
+    minmax(0, 1fr);
   gap: 0.5em;
   align-items: baseline;
 }
@@ -855,6 +1051,69 @@ looq-diagnostics .diagnostics.warning {
   color: var(--muted);
   border-bottom: 1px solid var(--border);
   padding: 0.25em 0.5em;
+  /* The handles are absolutely positioned against their header cell and sit in the
+     grid gap, so the header row must not clip them the way data rows clip their
+     cells. The header *text* is still clipped, by `.header-label` below. */
+  position: relative;
+}
+
+/* Only the label clips, not the cell: a resize handle lives in the cell too, and
+   `overflow: hidden` on the cell would cut it in half. */
+.entry-table-header > span {
+  position: relative;
+}
+
+.header-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The drag handle for the column to its left (`entry-table` spec, "Columns can be
+   resized"). It sits in the 0.5em grid gap, centred on the boundary, and exists
+   only in the header — never in a data row, so a drag can never begin on a row the
+   user meant to select. Wider than it looks: the hit area is the full gap plus a
+   little, while the visible hairline appears on hover/drag only. */
+.col-resizer {
+  position: absolute;
+  top: -0.25em;
+  bottom: -0.25em;
+  right: -0.5em;
+  width: 0.75em;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.col-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--accent);
+  opacity: 0;
+}
+
+.col-resizer:hover::after,
+.col-resizer:active::after {
+  opacity: 1;
+}
+
+.entry-table-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+/* Shown only once a column has actually been resized — at the defaults it would be
+   a button that does nothing (design D5). */
+.col-reset-all {
+  font-size: 0.8em;
+  flex: 0 0 auto;
 }
 
 /* The table fills its pane instead of living in a fixed 480px box inside a
@@ -902,7 +1161,15 @@ looq-entry-table[hidden] {
   right: 0;
 }
 
+/* The row height is a constant the virtual scroller does arithmetic with
+   (`ROW_HEIGHT` in looq-entry-table.ts), and it used to be written as an inline
+   `style` attribute on every row it created — the easiest of the three inline
+   sites to remove, and part of what lets the served CSP drop `'unsafe-inline'`
+   (design D3). If you change it here, change `ROW_HEIGHT` too: they are asserted
+   to agree in `entry-table-styles.test.ts`, because a drift would silently
+   misplace every row by a growing offset. */
 .entry-row {
+  height: 24px;
   font-size: 0.85em;
   padding: 0 0.5em;
   cursor: pointer;
@@ -922,8 +1189,13 @@ looq-entry-table[hidden] {
   background: var(--accent-bg);
 }
 
-.entry-row .col-message,
-.entry-row .col-timestamp {
+/* Every column clips, not just message and timestamp. The level column is sized
+   for a 1.6em badge, so anything wider than that — an absence marker, a future
+   longer glyph — used to escape the cell and paint over the message text instead
+   of being cut off. Clipping is the backstop; the marker itself is now an em dash
+   (see `renderRowCellsHtml`). The header's equivalent is `.header-label`, which
+   clips the label without clipping the resize handle beside it. */
+.entry-row > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1012,6 +1284,13 @@ looq-entry-detail {
 
 .detail-core dd {
   margin: 0;
+}
+
+/* An entry whose timestamp rests on an assumption — an offset the line did not carry,
+   or a year the shape cannot express (syslog RFC 3164, klog). Marked in warning
+   colour so it reads as "this point on the timeline was inferred", not as fact. */
+.detail-assumed {
+  color: var(--warn);
 }
 
 .detail-message-label,

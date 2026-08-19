@@ -14,6 +14,7 @@ function mkEntry(opts: Partial<EntryDto> & { ordinal: number }): EntryDto {
   return {
     timestamp: null,
     timestampUsedDefaultTz: false,
+    timestampYearInferred: false,
     level: null,
     message: "",
     fields: {},

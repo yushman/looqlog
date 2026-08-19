@@ -4,7 +4,15 @@ import { EntryIndex } from "./entry-index";
 import type { EntryDto } from "./wasm-types";
 
 function mkEntry(ordinal: number, timestamp: string | null, message = `m${ordinal}`): EntryDto {
-  return { ordinal, timestamp, timestampUsedDefaultTz: false, level: null, message, fields: {} };
+  return {
+    ordinal,
+    timestamp,
+    timestampUsedDefaultTz: false,
+    timestampYearInferred: false,
+    level: null,
+    message,
+    fields: {},
+  };
 }
 
 function iso(ms: number): string {
@@ -180,7 +188,15 @@ describe("EntryIndex — robust span (D4)", () => {
 });
 
 function mkLeveled(ordinal: number, tsMs: number, level: string | null): EntryDto {
-  return { ordinal, timestamp: iso(tsMs), timestampUsedDefaultTz: false, level, message: `m${ordinal}`, fields: {} };
+  return {
+    ordinal,
+    timestamp: iso(tsMs),
+    timestampUsedDefaultTz: false,
+    timestampYearInferred: false,
+    level,
+    message: `m${ordinal}`,
+    fields: {},
+  };
 }
 
 describe("EntryIndex — predicate (filtering-and-search, D2/D9)", () => {
