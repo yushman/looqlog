@@ -14,14 +14,27 @@
 // workspace's right pane (`looq-entry-detail`) renders it — so inspecting an entry
 // cannot reflow the rows around it.
 
+import {
+  clampColumnWidth,
+  DEFAULT_COLUMN_WIDTHS,
+  RESIZABLE_COLUMNS,
+  type ColumnWidths,
+  type ResizableColumn,
+} from "../column-widths";
 import type { EntryIndex } from "../entry-index";
 import { findMatchRanges, type CompiledQuery } from "../predicate";
 import type { TimeRange } from "../time-range";
 import type { EntryDto } from "../wasm-types";
 
 /** Uniform row height in CSS pixels — what makes virtual scrolling arithmetic
- * (index * height) rather than a measurement pass (D6). */
-const ROW_HEIGHT = 24;
+ * (index * height) rather than a measurement pass (D6).
+ *
+ * Exported because `style.css` carries the same number in `.entry-row { height }`
+ * (design D3 — the height stopped being an inline style, which is what let the CSP
+ * drop `'unsafe-inline'`). The two cannot be made to share one literal across a
+ * `.ts`/`.css` boundary, so `entry-table-styles.test.ts` asserts they agree
+ * instead: a drift would misplace every row by a growing offset, silently. */
+export const ROW_HEIGHT = 24;
 /** Extra rows rendered above/below the visible window so a fast scroll or
  * scrollbar drag doesn't show blank space for a frame. */
 const OVERSCAN_ROWS = 8;
@@ -43,23 +56,59 @@ export class LooqEntryTable extends HTMLElement {
 
   private summaryEl!: HTMLParagraphElement;
   private evictionEl!: HTMLParagraphElement;
+  private headerEl!: HTMLDivElement;
   private viewportEl!: HTMLDivElement;
-  private spacerEl!: HTMLDivElement;
   private rowsEl!: HTMLDivElement;
 
+  /** Column widths in `rem` (`entry-table` spec, "Columns can be resized"). Held
+   * here, written to the stylesheet below, and mirrored into the URL hash by
+   * whichever shell owns this table — the component never touches the hash itself
+   * (design.md D7: state travels through the shell). */
+  private columnWidths: ColumnWidths = DEFAULT_COLUMN_WIDTHS;
+  /** The application's own stylesheet and the three rules this component inserts
+   * into it and then mutates, instead of writing `style` attributes (design
+   * D2/D3/D4, `security` spec: `style-src` no longer permits inline styles). The
+   * rules are non-optional: `createStyleSheet` throws if the sheet is missing
+   * rather than leaving them unset (task 5.8), because a scroller with no rules
+   * renders the first screenful of any dataset and scrolls nowhere. */
+  private sheet: CSSStyleSheet | null = null;
+  private columnsRule!: CSSStyleRule;
+  private spacerRule!: CSSStyleRule;
+  private rowsRule!: CSSStyleRule;
+  /** In-flight column drag, or `null`. Started only from a header handle — there
+   * are no handles in data rows, so a drag can never begin on a row the user meant
+   * to select (`entry-table` spec, "Resizing does not select a row"). */
+  private drag: {
+    column: ResizableColumn;
+    pointerId: number;
+    handle: HTMLElement;
+    startX: number;
+    startWidthRem: number;
+    remPx: number;
+  } | null = null;
+
   connectedCallback(): void {
+    // Scopes this instance's generated rules. File mode and stream mode each mount
+    // their own table (`looq-app` / `looq-live-tail`), and a shared selector would
+    // have one instance's scroll offset positioning the other's rows.
+    const scope = `t${++tableInstanceSeq}`;
+    this.dataset.looqTable = scope;
+
     this.innerHTML = `
       <div class="entry-table-wrap">
-        <p class="entry-table-summary" id="table-summary"></p>
+        <div class="entry-table-head">
+          <p class="entry-table-summary" id="table-summary"></p>
+          <button type="button" class="col-reset-all" id="reset-columns" hidden>Reset columns</button>
+        </div>
         <p class="provisional-note eviction-banner" id="eviction-banner" hidden>
           Earlier entries you were viewing are no longer retained (evicted at
           <code>--max-lines</code>) — jumped to the oldest entry still available.
         </p>
-        <div class="entry-table-header" role="row">
-          <span class="col-ordinal">#</span>
-          <span class="col-timestamp">timestamp (UTC)</span>
-          <span class="col-level">level</span>
-          <span class="col-message">message</span>
+        <div class="entry-table-header" role="row" id="header">
+          <span class="col-ordinal"><span class="header-label">#</span>${resizerHtml("ordinal", "#")}</span>
+          <span class="col-timestamp"><span class="header-label">timestamp (UTC)</span>${resizerHtml("timestamp", "timestamp")}</span>
+          <span class="col-level"><span class="header-label">level</span>${resizerHtml("level", "level")}</span>
+          <span class="col-message"><span class="header-label">message</span></span>
         </div>
         <div class="entry-table-viewport" id="viewport" tabindex="0">
           <div class="entry-table-spacer" id="spacer">
@@ -70,9 +119,24 @@ export class LooqEntryTable extends HTMLElement {
     `;
     this.summaryEl = this.querySelector("#table-summary") as HTMLParagraphElement;
     this.evictionEl = this.querySelector("#eviction-banner") as HTMLParagraphElement;
+    this.headerEl = this.querySelector("#header") as HTMLDivElement;
     this.viewportEl = this.querySelector("#viewport") as HTMLDivElement;
-    this.spacerEl = this.querySelector("#spacer") as HTMLDivElement;
     this.rowsEl = this.querySelector("#rows") as HTMLDivElement;
+    this.createStyleSheet(scope);
+
+    // Pointer events (not mouse) so a touch or pen drag resizes too, and so that
+    // `setPointerCapture` keeps the drag attached to the handle once the pointer
+    // leaves it — without capture, dragging fast past the header edge drops the
+    // move events on whatever is underneath.
+    this.headerEl.addEventListener("pointerdown", this.handleResizeStart);
+    this.headerEl.addEventListener("pointermove", this.handleResizeMove);
+    this.headerEl.addEventListener("pointerup", this.handleResizeEnd);
+    this.headerEl.addEventListener("pointercancel", this.handleResizeEnd);
+    this.headerEl.addEventListener("dblclick", this.handleResizeDoubleClick);
+    (this.querySelector("#reset-columns") as HTMLButtonElement).addEventListener("click", () => {
+      this.setColumnWidths(DEFAULT_COLUMN_WIDTHS);
+      this.emitColumnWidths();
+    });
 
     this.viewportEl.addEventListener("scroll", () => {
       this.renderVisibleRows();
@@ -93,10 +157,194 @@ export class LooqEntryTable extends HTMLElement {
 
   disconnectedCallback(): void {
     window.removeEventListener("resize", this.handleResize);
+    // The three rules live in a stylesheet this component does not own, so it has
+    // to take them back out again: a remount inserts a fresh set under a new
+    // scope, and without this they would accumulate in `/assets/index.css` for the
+    // lifetime of the page.
+    this.deleteGeneratedRules();
   }
 
   private readonly handleResize = (): void => {
     this.renderVisibleRows();
+  };
+
+  // ---- generated stylesheet (design D2/D3/D4) -------------------------------
+
+  /** Inserts the three rules this component mutates into the application's *own*
+   * stylesheet — the one `index.html` already loads through
+   * `<link rel="stylesheet" href="/assets/index.css">`, and which `style-src
+   * 'self'` therefore permits. No element is created, so there is nothing for the
+   * policy to gate (design D2).
+   *
+   * The mechanism this replaced appended an empty `<style>` element, on the
+   * premise that empty content is nothing for a CSP to block. That premise is
+   * false: `style-src` gates the *insertion of the element*, and Chrome refused it
+   * under the served strict policy, naming the SHA-256 of the empty string. Not
+   * `adoptedStyleSheets` either — Safari shipped those in 16.4 while PRD §11
+   * targets Safari 16+, so 16.0–16.3 would get a table that never positions a row.
+   *
+   * The rules are appended at the end of the sheet, never inserted at an index, so
+   * they cannot disturb the cascade of the rules `style.css` authored. */
+  private createStyleSheet(scope: string): void {
+    const sheet = findAppStyleSheet();
+    if (!sheet) {
+      // Fails LOUD, deliberately (task 5.8). The soft `if (!sheet) return` that
+      // used to be here is precisely what turned a CSP-blocked stylesheet into a
+      // table that quietly showed 36 rows of 50,000 and scrolled nowhere —
+      // CLAUDE.md's silent-failure list exists for this. A missing stylesheet is
+      // not a survivable state for a virtual scroller: without the rules, every
+      // row sits at offset 0 and the viewport has no scrollable height.
+      this.reportFatal(
+        `The table's stylesheet (${APP_STYLESHEET_PATH}) could not be found, so rows cannot be ` +
+          `positioned. The table is disabled rather than showing part of the log as if it were all of it.`,
+      );
+      throw new Error(`looq-entry-table: ${APP_STYLESHEET_PATH} is not in document.styleSheets`);
+    }
+    this.sheet = sheet;
+    const at = `looq-entry-table[data-looq-table="${scope}"]`;
+    this.columnsRule = insertRule(sheet, `${at} .entry-table-wrap`);
+    this.spacerRule = insertRule(sheet, `${at} .entry-table-spacer`);
+    this.rowsRule = insertRule(sheet, `${at} .entry-table-rows`);
+    this.applyColumnWidths();
+  }
+
+  private deleteGeneratedRules(): void {
+    const sheet = this.sheet;
+    if (!sheet) {
+      return;
+    }
+    // By identity, not by remembered index: another instance may have appended its
+    // own rules after these, which would have shifted them.
+    for (const rule of [this.rowsRule, this.spacerRule, this.columnsRule]) {
+      const index = Array.from(sheet.cssRules).indexOf(rule);
+      if (index >= 0) {
+        sheet.deleteRule(index);
+      }
+    }
+    this.sheet = null;
+  }
+
+  /** An unrecoverable failure in the table itself, reported the way the app shell
+   * reports one (`error-states` spec, "Errors are reachable, not transient"): a
+   * persistent `.error-banner`, in place of the table rather than above a broken
+   * one, so it cannot be read as "the log is empty". */
+  private reportFatal(message: string): void {
+    this.innerHTML = `<div class="entry-table-wrap"><p class="error-banner"></p></div>`;
+    (this.querySelector(".error-banner") as HTMLParagraphElement).textContent = message;
+  }
+
+  // ---- resizable columns (`entry-table` spec, "Columns can be resized") ------
+
+  /** The current widths, in `rem`. */
+  getColumnWidths(): ColumnWidths {
+    return this.columnWidths;
+  }
+
+  /** Applies widths from outside the component — the URL hash, via the shell.
+   * Values are clamped here as well as at parse time, so no caller can install a
+   * width the user could not drag back (design D5). */
+  setColumnWidths(widths: ColumnWidths): void {
+    this.columnWidths = {
+      ordinal: clampColumnWidth("ordinal", widths.ordinal),
+      timestamp: clampColumnWidth("timestamp", widths.timestamp),
+      level: clampColumnWidth("level", widths.level),
+    };
+    this.applyColumnWidths();
+  }
+
+  /** Writes the three widths onto the one rule that defines the grid template's
+   * custom properties (design D1). Every row is its own grid, so all of them have
+   * to read the same variables or the columns would not line up; the message
+   * column is `minmax(0, 1fr)` in `style.css` and absorbs the remainder, which is
+   * what keeps the row exactly as wide as the viewport with no horizontal
+   * scrollbar to reconcile. */
+  private applyColumnWidths(): void {
+    const rule = this.columnsRule;
+    rule.style.setProperty("--col-ordinal", `${this.columnWidths.ordinal}rem`);
+    rule.style.setProperty("--col-timestamp", `${this.columnWidths.timestamp}rem`);
+    rule.style.setProperty("--col-level", `${this.columnWidths.level}rem`);
+    // The reset-all control only exists once there is something to reset — at the
+    // defaults it would be a button that does nothing (design D5's "a control
+    // restores all of them" is about the trap of having no way back, not about a
+    // permanent chrome element).
+    const resetBtn = this.querySelector("#reset-columns") as HTMLButtonElement | null;
+    if (resetBtn) {
+      resetBtn.hidden = RESIZABLE_COLUMNS.every((c) => this.columnWidths[c] === DEFAULT_COLUMN_WIDTHS[c]);
+    }
+  }
+
+  private emitColumnWidths(): void {
+    this.dispatchEvent(new CustomEvent<ColumnWidths>("columns-change", { detail: this.columnWidths }));
+  }
+
+  private readonly handleResizeStart = (event: PointerEvent): void => {
+    const handle = (event.target as HTMLElement | null)?.closest<HTMLElement>(".col-resizer");
+    const column = handle?.dataset.column as ResizableColumn | undefined;
+    if (!handle || !column || event.button !== 0) {
+      return;
+    }
+    // Stops the browser from starting a text selection over the header while the
+    // pointer sweeps across the table.
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    this.drag = {
+      column,
+      pointerId: event.pointerId,
+      handle,
+      startX: event.clientX,
+      startWidthRem: this.columnWidths[column],
+      // Widths are in `rem` but the pointer moves in px, so the conversion is read
+      // once per drag rather than per move — the root font size cannot change
+      // mid-drag in any way that matters, and reading it per move would force a
+      // style recalculation on every pointer event.
+      remPx: rootFontSizePx(),
+    };
+  };
+
+  private readonly handleResizeMove = (event: PointerEvent): void => {
+    const drag = this.drag;
+    if (!drag || event.pointerId !== drag.pointerId) {
+      return;
+    }
+    const deltaRem = (event.clientX - drag.startX) / drag.remPx;
+    // Clamped, never refused (design D5): a handle that stops moving when the
+    // pointer keeps going reads as broken, so the width simply stops at the floor
+    // (or the ceiling) while the pointer is free to come back.
+    const next = clampColumnWidth(drag.column, drag.startWidthRem + deltaRem);
+    if (next === this.columnWidths[drag.column]) {
+      return;
+    }
+    this.columnWidths = { ...this.columnWidths, [drag.column]: next };
+    this.applyColumnWidths();
+    // Emitted per move, not per drag-end: the shell's hash writer debounces
+    // (`url-hash.ts`'s `HashWriter`), so this costs one scheduled timer rather than
+    // a history entry per pointer move, and a link copied mid-drag is still right.
+    this.emitColumnWidths();
+  };
+
+  private readonly handleResizeEnd = (event: PointerEvent): void => {
+    const drag = this.drag;
+    if (!drag || event.pointerId !== drag.pointerId) {
+      return;
+    }
+    if (drag.handle.hasPointerCapture(event.pointerId)) {
+      drag.handle.releasePointerCapture(event.pointerId);
+    }
+    this.drag = null;
+  };
+
+  /** Double-clicking a handle restores the column to its left (`entry-table` spec,
+   * "Resetting one column"). */
+  private readonly handleResizeDoubleClick = (event: MouseEvent): void => {
+    const handle = (event.target as HTMLElement | null)?.closest<HTMLElement>(".col-resizer");
+    const column = handle?.dataset.column as ResizableColumn | undefined;
+    if (!column) {
+      return;
+    }
+    event.preventDefault();
+    this.columnWidths = { ...this.columnWidths, [column]: DEFAULT_COLUMN_WIDTHS[column] };
+    this.applyColumnWidths();
+    this.emitColumnWidths();
   };
 
   /** The selected entry's identity (D6: an ordinal, not a row index), or `null`.
@@ -252,8 +500,13 @@ export class LooqEntryTable extends HTMLElement {
     const visibleCount = Math.ceil(clientHeight / ROW_HEIGHT) + OVERSCAN_ROWS * 2;
     const lastIdxExclusive = Math.min(total, firstIdx + visibleCount);
 
-    this.spacerEl.style.height = `${total * ROW_HEIGHT}px`;
-    this.rowsEl.style.transform = `translateY(${firstIdx * ROW_HEIGHT}px)`;
+    // Two rule mutations, not two `style` attribute writes (design D3/D4): the
+    // existing `CSSStyleDeclaration` is assigned in place, which is what keeps this
+    // off the "re-parse the whole stylesheet every frame" path `replaceSync`/
+    // `textContent =` would put it on. Measured against the recorded 50k baseline —
+    // see the change's tasks.md 1.1/5.1.
+    this.spacerRule.style.height = `${total * ROW_HEIGHT}px`;
+    this.rowsRule.style.transform = `translateY(${firstIdx * ROW_HEIGHT}px)`;
 
     // Rows are reused, not rebuilt. Replacing `rowsEl.innerHTML` on every render
     // detached whatever the user was pressing on: under a live stream the row went
@@ -296,14 +549,78 @@ export class LooqEntryTable extends HTMLElement {
   }
 }
 
+/** Monotonic per-instance suffix for the generated rules' selectors. */
+let tableInstanceSeq = 0;
+
+/** The application stylesheet's path, as `index.html` links it (design D2). */
+const APP_STYLESHEET_PATH = "/assets/index.css";
+/** A selector `style.css` authors and nothing else does. Used to recognise the
+ * same stylesheet under `vite dev`, where Vite injects each imported `.css` as a
+ * separate `<style>` element with no `href` instead of serving one bundled file —
+ * so a path match alone would find nothing there. */
+const APP_STYLESHEET_MARKER = ".entry-row";
+
+/** The stylesheet this component inserts its rules into, or `null` if it is not
+ * there. Deliberately never waits for it: the served page loads `index.css` with a
+ * `<link>` in `<head>`, and a stylesheet blocks script execution, so by the time
+ * any module — and therefore any `connectedCallback` — runs, the sheet is either
+ * loaded or has failed. Making this async to "handle" a load ordering that cannot
+ * happen would only reintroduce a window in which the rules are missing and the
+ * scroller silently renders one screenful. */
+function findAppStyleSheet(): CSSStyleSheet | null {
+  const sheets = Array.from(document.styleSheets);
+  const linked = sheets.find(
+    (sheet) => sheet.href !== null && new URL(sheet.href, document.baseURI).pathname === APP_STYLESHEET_PATH,
+  );
+  return linked ?? sheets.find(hasMarkerRule) ?? null;
+}
+
+function hasMarkerRule(sheet: CSSStyleSheet): boolean {
+  let rules: CSSRuleList;
+  try {
+    rules = sheet.cssRules; // throws `SecurityError` on a cross-origin stylesheet
+  } catch {
+    return false;
+  }
+  return Array.from(rules).some(
+    (rule) => rule instanceof CSSStyleRule && rule.selectorText === APP_STYLESHEET_MARKER,
+  );
+}
+
+/** Appends an empty rule at the end of the sheet and hands back the `CSSStyleRule`
+ * to mutate later. `insertRule` needs a syntactically complete rule, hence the
+ * empty block; appending (rather than inserting at an index) is what keeps the
+ * authored rules' cascade in `style.css` untouched. */
+function insertRule(sheet: CSSStyleSheet, selector: string): CSSStyleRule {
+  const index = sheet.insertRule(`${selector} {}`, sheet.cssRules.length);
+  return sheet.cssRules[index] as CSSStyleRule;
+}
+
+/** px per `rem`, i.e. the root font size. 16 is the spec default and the only
+ * sensible answer if the computed value is ever unreadable. */
+function rootFontSizePx(): number {
+  const raw = parseFloat(getComputedStyle(document.documentElement).fontSize);
+  return Number.isFinite(raw) && raw > 0 ? raw : 16;
+}
+
+/** A drag handle at a column's right boundary. Header only, never in a data row
+ * (`entry-table` spec, "Resizing does not select a row"): a handle inside a row
+ * would put a drag target on top of the thing the user clicks to select. */
+function resizerHtml(column: ResizableColumn, label: string): string {
+  return (
+    `<span class="col-resizer" data-column="${column}" role="separator" aria-orientation="vertical" ` +
+    `aria-label="Resize the ${label} column" title="Drag to resize the ${label} column; double-click to reset it"></span>`
+  );
+}
+
 /** An empty row shell, built once and then reused across renders (see
  * `renderVisibleRows`). Only its cells are rewritten, and only when the entry it
- * shows actually changes. */
+ * shows actually changes. The height is no longer written here: it is a constant,
+ * so it belongs in `.entry-row` in `style.css` (design D3) — see `ROW_HEIGHT`. */
 function createRowElement(): HTMLElement {
   const el = document.createElement("div");
   el.className = "entry-row";
   el.setAttribute("role", "row");
-  el.style.height = `${ROW_HEIGHT}px`;
   return el;
 }
 
@@ -324,7 +641,12 @@ function compiledQueryKey(compiled: CompiledQuery): string {
 function renderRowCellsHtml(entry: EntryDto, compiled: CompiledQuery): string {
   const timestampHtml = entry.timestamp
     ? `<span title="${escapeHtml(entry.timestamp)}">${escapeHtml(rowTimestamp(entry.timestamp))}</span>`
-    : `<span class="absent" title="no timestamp extracted">no timestamp</span>`;
+    // An em dash, not the words "no timestamp": the marker has to fit a column
+    // sized for a value, and a phrase that outgrows its cell is what made the
+    // level column paint over the message column. `title`/`aria-label` carry the
+    // meaning, the same way the level abbreviation does (`entry-table` spec,
+    // "Missing values are explicit" asks for an explicit marker, not for words).
+    : `<span class="absent" aria-label="no timestamp extracted" title="no timestamp extracted">—</span>`;
   // Visible text is compressed to the level's first letter (all six of
   // TRACE/DEBUG/INFO/WARN/ERROR/FATAL are already unique on that letter); the
   // full word stays available via `aria-label` (assistive tech) and `title`
@@ -333,7 +655,7 @@ function renderRowCellsHtml(entry: EntryDto, compiled: CompiledQuery): string {
   // full name").
   const levelHtml = entry.level
     ? `<span class="level-badge level-${escapeHtml(entry.level.toLowerCase())}" aria-label="${escapeHtml(entry.level)}" title="${escapeHtml(entry.level)}">${escapeHtml(entry.level[0]!)}</span>`
-    : `<span class="absent" title="no level extracted">no level</span>`;
+    : `<span class="absent" aria-label="no level extracted" title="no level extracted">—</span>`;
   const truncated = entry.message.length > MESSAGE_TRUNCATE_CHARS;
   const messageShown = truncated ? `${entry.message.slice(0, MESSAGE_TRUNCATE_CHARS)}…` : entry.message;
   // Highlighting runs on the truncated text (`search` spec: "within the

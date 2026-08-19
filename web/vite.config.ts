@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 
 // Fixed (unhashed) output filenames: `scripts/build-frontend.sh` copies the build
@@ -24,5 +25,14 @@ export default defineConfig({
         entryFileNames: "assets/[name].js",
       },
     },
+  },
+  test: {
+    // Vitest stubs CSS imports to an empty string by default, `?raw` included.
+    // `entry-table-styles.test.ts` reads `style.css` as text to assert that the
+    // row height there matches `ROW_HEIGHT` in the scroller (design D3 —
+    // the height stopped being an inline style, so the two now live in different
+    // files and can drift silently). Nothing renders CSS in these tests; this only
+    // makes the file's own text readable.
+    css: true,
   },
 });
