@@ -1977,6 +1977,410 @@ Verified against the real binary at `#format=json`: summary `json (set explicitl
 parsed. `npm run test` 55/55, `npm run typecheck` clean, `cargo test --workspace` 103/0, clippy clean,
 assets byte-identical across two rebuilds.
 
+## 2026-08-18 — `prefix-and-payload-parsing`: the plain-text path stops being a dead end
+
+The complaint that started it was "we only eat one format". The diagnosis was narrower and worse:
+`match_leading_timestamp` recognised exactly one shape, anchored at offset 0, so syslog, klog,
+Apache/CLF and anything a collector had prefixed all landed in plain text with `timestamp: None` —
+no timestamp, no timeline, which is the feature the product is built around. PRD §1 names
+`kubectl logs > file.log` and `docker logs > file.log` as the target scenarios and both parsed
+badly.
+
+**The decision worth explaining to a stranger: no new `Format` variants.** TDR §8's P1 list
+(syslog 3164, syslog 5424, Apache combined, Docker/k8s) reads like four new enum members, and that
+is not what shipped. Detection is an ordered chain with an 80% threshold; going 3 → 7 candidates
+makes a mis-detect both likelier and harder to reason about, and two of those four could never
+work as peers anyway — Docker's lines *are* valid JSON, so a `Format::Docker` below `Format::Json`
+in the chain can never win, and syslog 5424's structured data (`iut="3"`) reads as logfmt pairs.
+Widening the prefix scanner inside plain text instead helps every log that merely *resembles* one
+of those formats, not only the four that were named. The cost is real and recorded in both
+READMEs: an Apache line gets a timestamp and a message, but `status`/`method`/`path` do not become
+filter chips, because nothing knows the number after the request is a status code.
+
+**Numbers.** Baseline first, on this machine, before touching anything:
+
+```
+wc -c < crates/looq/assets/wasm/core.wasm    # 194,350 B
+cargo bench -p looq-core                     # json 74.4, logfmt 100.4, plain 120.1 ms/MB
+```
+
+That plain figure is worth flagging: `design.md` quoted ~80 ms/MB from an older entry here, and
+the real baseline on this machine is 120.1. Machine difference, not a regression — but it means
+the design doc was comparing against a number from somewhere else, and a reviewer reading only the
+design would have concluded the change cost 50% throughput.
+
+After (`cargo bench -p looq-core`, `bash scripts/build-frontend.sh` then `wc -c`):
+
+| | baseline | after | gate |
+|---|---|---|---|
+| json | 74.4 ms/MB | 76.0 | <200 |
+| logfmt | 100.4 ms/MB | 104.4 | <200 |
+| plain | 120.1 ms/MB | 121.3 | <200 |
+| plain, six shapes rotating | — | 149.3 | <200 |
+| `core.wasm` | 194,350 B | 206,629 B (+6.3%) | ~307,200 B |
+
+The `plain_mixed_shapes` fixture exists to defeat the sticky choice deliberately — six timestamp
+shapes rotating line to line, so the recorded shape misses on ~5 lines in 6. 149.3 ms/MB is the
+honest worst case and it is 75% of the gate. Without the sticky selection the per-line cost is
+(shapes × candidate offsets) on every line, which is what that number would have been *before*
+the optimisation, everywhere.
+
+**A design decision that survived contact and one that did not.** The sticky choice was specified
+as "try the recorded shape *and offset* first". Jumping straight to the recorded offset changes
+which match wins on a line that also carries an earlier one, so only the shape is sticky and
+offsets are still swept ascending — the optimisation has to be result-neutral, and there is a test
+that proves it. Separately, D9 called for a new `DetectionOutcome` variant; the spec scenarios
+only require prefixed plain text to be *reported as a threshold match*, and reusing `Threshold`
+keeps the DTO mapping and the UI's `outcome === "fallback"` check working. Both artifacts were
+corrected rather than left describing code that does not exist.
+
+**The hole found while verifying, not while writing.** `looq-core` must not read the clock
+(ADR-0005), so the reference instant for year inference is a caller parameter — and it was left
+unwired at the WASM boundary. With no reference, year-less shapes are not dated by invention;
+they are not recognised at all. Groups 1–7 were green, 88 unit tests passed, and syslog and klog
+would still have rendered an empty timeline in the browser. It became task 8.1 inside the same
+change rather than a follow-up, per the rule in CLAUDE.md.
+
+**Behavior changes users will notice**, both documented in both READMEs: the positional level
+token now beats the whole-message scan, so `… INFO retrying after ERROR response` reports INFO
+where it used to report ERROR; and plain text can now contribute filter chips, which it never did
+before.
+
+Verified in the browser against the real release binary, 300 lines rotating five formats through
+`--stdin`: 300/300 entries timestamped, timeline spanning 17:42:40 → 17:47:00, format panel
+reading `plain (100%)` instead of the old alarming "fell back to plain text" warning, chips for
+`status`/`path`/`service`/`attempt`/`trace` extracted out of plain-text lines, the CLF client
+address preserved in the message, and the detail pane showing *"year inferred — this timestamp
+shape carries none"* on a syslog entry. `cargo test --workspace` 165/0, `cargo fmt --all --check`
+clean, `cargo clippy --all-targets --all-features -- -D warnings` clean.
+
+**Known rough edge, not fixed here:** a plain-text line whose JSON payload carries no
+`msg`/`message` key renders with an empty message column — the fields are all there and visible in
+the detail pane, but the row looks blank where it used to show the raw JSON text. That is
+consistent with how JSON-format files have always behaved (TDR §9: JSON leaves the message empty
+rather than duplicating the whole line), which is exactly why it was not changed unilaterally.
+
+## 2026-08-19 — `logcat-and-payload-precision`: 98.1% of a bugreport had no timestamp, now 78.4%
+
+`prefix-and-payload-parsing` shipped six timestamp shapes and the very next measurement — a real
+13MB / 168,260-line Android bugreport — came back at **161,177 of 164,275 entries with no
+timestamp (98.1%)**, with zero skipped lines. Nothing was broken; the parser simply could not see
+what it was looking at. The gap was one shape: logcat's `04-21 13:07:53.198`, which is neither
+klog's `I0421 13:07:53` (letter, `MMDD`, no dash) nor syslog's `Apr 21 13:07:53` (month name).
+
+**Numbers, before and after, same file, same command.** Build and serve:
+
+```
+cargo build --release -p looq
+(cat bugreport-…-2026-04-21-13-07-30.txt; sleep 600) \
+  | ./target/release/looq --stdin --port 7896 --no-browser --max-lines 200000
+```
+
+then read the timeline caption and the filter rail at `http://127.0.0.1:7896/`:
+
+| | before | after |
+|---|---|---|
+| entries parsed | 164,275 (0 skipped) | 164,275 (0 skipped) |
+| entries with **no** timestamp | 161,177 (98.1%) | **128,778 (78.4%)** |
+| entries **on** the timeline | 3,098 (1.9%) | **35,497 (21.6%)** |
+| detection | `fell back to plain text (12%)` | `fell back to plain text (12%)` |
+| junk chips | `Alt-Svc`, `Content-Length`, `X-Android-Sent-Millis`, `Cross-Origin-Resource-Policy` | none of them |
+| logcat chips | — | `tag`, `pid`, `tid` (high-cardinality, typed input), `uid` (34 values) |
+
+32,399 lines moved onto the timeline. `grep -cE '^[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} '`
+on the same file counts 33,300 lines *opening* with the logcat timestamp, so ~900 of them fail the
+rest of the shape — no columns, or no `Tag:` anchor — and are correctly left alone. Levels now
+resolve on 33,760 entries: TRACE 686, DEBUG 12,533, INFO 15,251, WARN 3,365, ERROR 1,891, FATAL 34.
+The PROBE_HTTP line that used to spray HTTP header names into the field inventory now contributes
+exactly `time`, `ret`, `request` and `headers`.
+
+**The detection string did not move, and that is the designed outcome, not a miss.** Detection
+samples the first 100 non-empty lines; a bugreport opens with ~1,370 lines of `dumpstate` preamble
+and section banners, so no prefix shape is ever selected from that head. design.md D6 predicted
+this exactly: plain text is still chosen, the sticky hint is simply absent, and every line pays the
+full sweep. The file is 74% `dumpsys` output either way. Worth stating because the proposal quoted
+`12%` as motivation, and a reviewer checking that one number would conclude nothing happened.
+
+**Benchmarks — and an honest note about what they were measuring.** The `plain_mixed_shapes`
+fixture, the one that exists to defeat the sticky choice, **contained no logcat lines at all** until
+task 7.1 added them. Any "no throughput regression" claim made before that would have been
+measuring the cost of a seventh entry in the sweep table and nothing else — never the new scanner,
+never a logcat-heavy sticky-hint miss, which is the case this change actually risks. The fixture now
+rotates seven shapes and cycles all four column layouts (`cargo bench -p looq-core`):
+
+| | baseline (task 1.1) | after | gate |
+|---|---|---|---|
+| json | 74.0 ms/MB | 74.0 | <200 |
+| logfmt | 100.2 ms/MB | 100.3 | <200 |
+| plain | 121.5 ms/MB | 121.5 | <200 |
+| plain, shapes rotating | 150.0 ms/MB (6 shapes, no logcat) | 146.4 (7 shapes, logcat included) | <200 |
+| `core.wasm` | 206,629 B | 210,379 B (+3,750, +1.8%) | ~307,200 B |
+
+The mixed number came in at 157.6 ms/MB on the first run and 146.4 on a re-run minutes later with
+a tight confidence interval ([146.2, 146.7]); the first run had 16% outliers and was machine noise.
+Reporting both rather than only the flattering one. Either way it is under three quarters of the
+gate, and the new fixture is a *harder* input than the old one.
+
+**Behavior changes users will notice**, both documented in both READMEs: a brace-delimited logfmt
+value is now one field holding its text (`headers={…}`), where a dumped Java map used to contribute
+each member as a top-level chip — the same rule nested JSON already followed; and the whole-message
+level scan now skips a token immediately followed by `=`, so `err=Success` reports no level instead
+of ERROR via the `ERR` alias. `level=err` still means ERROR: the difference is which side of the `=`
+the token sits on.
+
+**What this deliberately does not do**, now in Known Limitations in both READMEs: dmesg/kernel
+monotonic timestamps (`[ 1538269.814760]`, 4,897 lines in this file) — seconds since boot cannot
+become an instant without a boot anchor that exists only in the bugreport preamble, and reading it
+would make the parser extract file-level metadata, which nothing in `looq-core` does; and bugreport
+section awareness, which is a product feature rather than a parser fix.
+
+`cargo test --workspace` 193/0 across 7 binaries, `cargo fmt --all --check` clean, `cargo clippy
+--all-targets --all-features -- -D warnings` clean, no new dependencies.
+
+## 2026-08-19 — `resizable-table-columns`: the perf gate passed, the CSP gate took two attempts
+
+Verification pass over task groups 5 and 6. The columns work. The security payoff the change was
+partly built for was blocked by the mechanism the design had chosen, which is written up below as
+it was found; the fix and the numbers that close it are at the end of this entry.
+
+**The perf gate (task 5.1) passed, and needed two metrics to say anything at all.** Same method as
+the task 1.1 baseline: release binary serving `target/perf-fixtures/fixture-50k.jsonl` in file mode
+(`script -q /dev/null ./target/release/looq --port 7811 --no-browser <file>` — without a pty on
+stdin the binary auto-selects stdin mode), Playwright at 1280x800, file opened through the picker,
+50,000 entries, 36 DOM rows, a 2-second programmatic `scrollTop` sweep over 1,199,543 px.
+
+| metric | baseline (1.1) | now (5.1) |
+|---|---|---|
+| frame time, avg | 16.67 ms | 16.66–16.81 ms (9 runs) |
+| frame time, max | 17.70 ms | 17.6–17.8 ms (one warm-up run: 33.68) |
+| frames over 33.3 ms | 0 | 0 in 8 of 9 runs; 1 in the first run of a batch |
+| synchronous `renderVisibleRows()` per scroll event, avg | 1.659 ms | 2.27 ms cold, 0.89–1.95 ms warm |
+| same, p95 / max | 3.000 / 3.500 ms | 1.2–3.6 / 1.4–4.7 ms |
+
+The frame-time row is the one the change's own proposal named as the gate, and on this machine it
+is **vsync-locked and would have hidden the regression completely** — 16.67 before, 16.67 after, on
+a metric with no headroom sensitivity. The second row is the one that moves. It brackets
+`renderVisibleRows()` between a capture-phase and a bubble-phase `scroll` listener on the viewport
+over 120 rAF-paced steps; verified that the bracket is real rather than assumed, by reading the row
+container's computed `transform` in both listeners (`matrix(1,0,0,1,0,0)` in the capture one,
+`matrix(1,0,0,1,0,599568)` in the bubble one — the render happens in between).
+
+The implementing agent measured +30% on that path (1.659 → 2.16–2.57 ms) and **the user was shown
+both numbers and accepted the regression**, on the grounds that half a millisecond inside a 16.7 ms
+frame leaves a >6x margin. Re-measuring reproduces that only for the *first* sweep after a page
+load (2.27 ms); warm runs land at 0.89–1.95 ms, i.e. at or below the baseline. So the cold/warm
+spread on this metric is wider than the regression attributed to the change, and the "+30%" figure
+is a cold-start number compared against a baseline of unknown warmth. Recording that rather than
+claiming a clean win: the honest statement is that no run, cold or warm, came near the frame budget.
+
+**Then task 5.4 failed, and it failed in exactly the place the design argued it would not.**
+Design D2 chose `document.createElement("style")` appended with no text content plus `insertRule`,
+over `adoptedStyleSheets` (which Safari only shipped in 16.4, and PRD §11 targets Safari 16+). Its
+stated reason: *"An empty `<style>` element has no content to parse, so nothing is blocked."*
+
+That is wrong in Chrome. Serving `style-src 'self'` for real produces, on page load, before any file
+is opened:
+
+```
+Applying inline style violates the following Content Security Policy directive 'style-src 'self''.
+Either the 'unsafe-inline' keyword, a hash ('sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='),
+or a nonce ('nonce-...') is required to enable inline execution.
+```
+
+`sha256-47DEQpj8...` is the SHA-256 of the empty string. CSP hashed the element's empty content and
+required a match anyway: `style-src` gates the *insertion* of a `<style>` element, not the presence
+of text in it. The element is blocked, `styleEl.sheet` is `null`, `createStyleSheet` takes its
+`if (!sheet) return` path, and all three rules stay `null` — so `renderVisibleRows` silently skips
+the spacer height and the row transform. Measured with a 50,000-entry file loaded under the strict
+header: spacer `height: 0px`, viewport `scrollHeight` 864 instead of 1,200,000, rows `transform:
+none`. The table shows the first 36 entries and the user can never reach the other 49,964. Column
+resizing is inert for the same reason. **One console violation, not the 144 of the previous attempt,
+and rows that render but cannot scroll rather than no rows at all — a quieter version of the same
+failure.**
+
+Task 2.4's dry run could not have caught this, and said so at the time: it injected a
+`<meta http-equiv="Content-Security-Policy">` into an *already-loaded* page, so the `<style>`
+element already existed and only subsequent CSSOM writes were tested. Those genuinely are not
+CSP-gated. Element insertion is, and only a served header exercises it.
+
+Three fixes were probed live against the strict header before reverting, so the next pass starts
+with data rather than a guess:
+
+- `new CSSStyleSheet()` + `document.adoptedStyleSheets` — **works** under the strict policy. This is
+  the option D2 rejected on Safari 16.0–16.3.
+- `insertRule` into the already-loaded, same-origin `/assets/index.css` sheet found via
+  `document.styleSheets` — **works** (probe rule applied, computed `rgb(1, 2, 3)`), needs no new
+  element at all, and `CSSStyleSheet.insertRule` predates every browser in PRD §11's range. Looks
+  like the answer, subject to the ordering question (the component's rules would then live at the
+  end of the app stylesheet, and `index.css` must have loaded before `connectedCallback` runs).
+- Adding `'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='` to `style-src` — works and is
+  stable (empty content always hashes the same), but it is a CSP concession to keep a mechanism
+  that has a concession-free alternative.
+
+Picking between them changes design D2's recorded decision and the mechanism `entry-table-styles.
+test.ts` asserts, so it goes back to the user rather than being decided here. `crates/looq/src/
+server.rs` and `crates/looq/tests/cli.rs` were reverted to byte-identical-to-HEAD; the served CSP is
+still `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'`.
+The parked "rework row positioning off inline `element.style`" idea below therefore **stays open**:
+the rework shipped, the CSP payoff it exists for has not.
+
+**Everything else in groups 5/6 passed.** Resize driven end to end with real mouse events against
+the release binary: dragging the timestamp handle 80 px left took the column 200 px → 120 px with
+the message column absorbing it (300.016 → 380.016 px), row width 622 px against a 622 px viewport
+throughout, no row selected by the drag; dragging 600 px left clamped at 48 px (= the 3 rem floor)
+with the handle still present and re-draggable; double-clicking that handle restored 200 px while
+leaving a widened ordinal column at 88 px; the **Reset columns** button (hidden until a width
+differs from default) restored `48px 200px 40px` and cleared `cols=` from the hash. The hash
+round-tripped as `#cols=5.5%2C12.5%2C2.5`, and a genuinely fresh load of `#cols=5,7,3` rendered
+`80px 112px 48px`. One thing worth knowing: editing the hash on an *already-loaded* page does
+nothing — the app reads the hash at startup only. Checked that this is general and not new, by
+setting `#q=job` the same way on a loaded page: also ignored.
+
+`cargo test --workspace` 193/0, `cargo fmt --all --check` clean, `cargo clippy --all-targets
+--all-features -- -D warnings` clean, `npm run typecheck` clean, `npm run test` 7 files / 78 tests,
+`openspec validate resizable-table-columns --strict` valid. No new dependencies.
+
+### The second attempt: insert into the stylesheet the page already loads
+
+The fix is the second of the three probes above, and it needs no new element at all. `index.html`
+loads `<link rel="stylesheet" crossorigin href="/assets/index.css">`, which `style-src 'self'`
+permits by definition. `createStyleSheet` now finds that sheet in `document.styleSheets` and appends
+its three rules there with `insertRule`. Nothing is created, so there is nothing for the policy to
+gate; the per-instance scoping (`looq-entry-table[data-looq-table="tN"]`) is unchanged, and
+appending rather than inserting at an index means the rules cannot disturb the cascade of what
+`style.css` authored. `disconnectedCallback` takes them back out again by identity, because this is
+a sheet the component does not own and a remount would otherwise leave dead rules behind.
+
+Load ordering was the one thing that looked risky, and it turns out not to be: a `<link>` stylesheet
+blocks script execution, so `index.css` is in `document.styleSheets` before any module — hence any
+`connectedCallback` — runs. There is no async wait for it, deliberately: a wait would reintroduce a
+window in which the rules are missing and the scroller quietly renders one screenful, which is the
+bug being fixed.
+
+**Which is the second half of the fix, and the more important one.** The soft `if (!sheet) return`
+is gone. A missing stylesheet now renders a persistent `.error-banner` — the same element the app
+shell uses for `error-states`' "errors are reachable, not transient" — *in place of* the table, and
+then throws. The three rule fields stopped being nullable, so `renderVisibleRows` and
+`applyColumnWidths` lost their `if (rule)` guards and there is no path left that can skip a write.
+Verified for real rather than by inspection, by shadowing `Document.prototype.styleSheets` with `[]`
+and mounting a table in a live page: red banner reading *"The table's stylesheet
+(/assets/index.css) could not be found, so rows cannot be positioned. The table is disabled rather
+than showing part of the log as if it were all of it."*, no `.entry-table-viewport` rendered at all,
+and `Error: looq-entry-table: /assets/index.css is not in document.styleSheets` in the console. The
+original defect was survivable-looking; this one is not, which is the point.
+
+Re-verified with the policy **served on the response**, which is the only kind of run that would
+have caught the first defect:
+
+```
+curl -s -D - -o /dev/null http://127.0.0.1:7821/
+before: content-security-policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'
+after:  content-security-policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'
+```
+
+| under the served strict policy | first attempt (`<style>` element) | now |
+|---|---|---|
+| CSP violations | 1 | **0** |
+| viewport `scrollHeight`, 50k entries | 864 | **1,200,000** |
+| row container transform, scrolled to the end | `none` | `matrix(1, 0, 0, 1, 0, 1.19933e+06)` |
+| ordinals reachable | 1–36 | **1–50,000** |
+| column resize | inert | drags and clamps |
+
+Zero violations means both a `securitypolicyviolation` listener returning `[]` and a console with
+exactly one message in it, a pre-existing `favicon.ico` 404 — across page load, opening the file,
+scrolling the whole dataset, dragging a column and resizing the window (which forces a `uPlot`
+redraw, and `uPlot` writes `el.style.*` internally; CSSOM writes were never gated, which is why it
+survives). `document.querySelectorAll('looq-entry-table [style]').length` stayed 0 throughout. Also
+run in stdin mode (`head -5000 fixture-50k.jsonl | looq --port 7822`), because `looq-live-tail`
+mounts a second table: 5,000 entries, `scrollHeight` 120,000, transform
+`matrix(1, 0, 0, 1, 0, 119400)`, three scoped rules, 0 violations.
+
+`crates/looq/tests/cli.rs` now asserts `style-src 'self'` is present and that `'unsafe-inline'`
+appears nowhere in the policy, so a re-widening fails the suite rather than being noticed by
+someone reading a header. Both READMEs' Security sections were updated in the same pass — they had
+been left alone on purpose while the concession was still true.
+
+Suite after the rework, first run each, no flakes: `cargo test --workspace` 193/0, `cargo fmt --all
+--check` clean, `cargo clippy --all-targets --all-features -- -D warnings` clean, `npm run
+typecheck` clean, `npm run test` 7 files / 80 tests, `openspec validate resizable-table-columns
+--strict` valid. Still no new dependencies.
+
+**The lesson worth keeping is not "empty `<style>` is blocked".** It is that a policy injected into
+an already-loaded page tests a different thing from a policy served on the response — the first
+exercises CSSOM writes, which are never gated, and never exercises element insertion, which is. A
+dry run that cannot fail is not evidence. And a guard that fails soft converts "blocked" into "looks
+like a short log", which is worse than a crash.
+
+## 2026-08-19 — `collapsible-workspace-panes`: the CSS was the easy half
+
+Shipped the change the previous entry parked: the filter rail and the detail pane each collapse
+away, giving their width to the table, with the state in the hash as `panes=` (naming what is
+*collapsed*, so the ordinary both-open state stays out of the link entirely, same principle as
+default column widths). The first version put both toggles in the topbar and collapsed the pane's
+track to exactly `0`; it was built, verified, seen running and rejected — see the reversal below.
+Measured in Chrome at 1440px as it now ships: rail 288px, table 800px, detail 352px → collapse the
+rail and it is `32px 1056px 352px`, collapse both and it is `32px 1376px 32px`, with
+`document.scrollHeight - clientHeight` still 0 in every state.
+
+**The half that was actually work is the no-hidden-warnings rule.** `app-shell` guaranteed that a
+collapsed *section* keeps stating its status and opens itself for something you must not miss —
+written about `<details>` inside a pane that was always there. Collapse the whole rail and both
+guarantees quietly evaporate: the diagnostics section is still `open`, inside a pane of zero
+width. So the rule moved up a level. `looq-detection` and `looq-diagnostics` now raise a bubbling
+`rail-attention` event carrying `{ needsAttention, autoExpand }`; `looq-workspace` listens for it
+on itself (both shells mount the same surfaces, so this belongs to the layout, not to either
+shell), badges the rail's own button while any surface is warning, and expands the rail when a
+surface opens itself.
+
+Verified against real files, not by inspection. `target/ui-fixtures/mild-skips.jsonl` (900 valid
+JSON lines, 59 garbage → 6.2%, under the 20% severe threshold) loaded from `#panes=rail`: rail
+width 32px, badge visible on the strip's button, diagnostics summary `59 skipped`, section *not*
+auto-opened, rail stays collapsed — the user is told, not overruled. `severe-skips.jsonl` (300
+valid, 200 garbage → 40%)
+from `#format=json&panes=rail+detail`: the diagnostics section auto-opened **and** the rail
+expanded to 288px while the detail pane stayed collapsed — only the pane that had something to
+show. Same through the detection path: a prose fixture that falls back to plain text expands the
+rail on its own. A clean parse still shows `0 skipped`, `json (100%)`, both sections closed, no
+badge — the original scenarios did not regress.
+
+Two smaller things worth writing down. The 1100px breakpoint had two definitions (`style.css` and
+`NARROW_LAYOUT_QUERY`) and this change would have added a third; it now has one — the media query
+publishes `--narrow-layout: 1` and `isNarrowLayout()` reads that custom property, so the rail's
+sections still start collapsed at exactly the width the layout stacks at (checked at 900px: 0 of 4
+filter sections open). And collapsing is a grid-template change, never `display: none`: the pane
+keeps its box and its scroll offset.
+
+**Then it was rejected on sight, and D1 was reversed.** The topbar pair optimised for reclaimed
+pixels — a strip costs permanent width, a pane spends most of its time collapsed, and a reopen
+control "should never live inside the thing it reopens". Seen running, that argument lost to
+discoverability: a control that belongs to the pane is where you look for it, and a collapsed pane
+that says nothing is a pane you forget exists. So each pane now carries its own chevron button, and
+collapsing leaves a 2rem strip with that button and the pane's name — `Filters`, `Details` — in
+`writing-mode: vertical-rl`. Real text, deliberately: not an image and not a rotated background, so
+it survives zoom and a screen reader. The table's gain is `pane − strip` (256px for the rail, 320px
+for the detail pane) instead of the whole pane, which is the price of the strip and was worth
+paying.
+
+The consequence that would have shipped this broken is the tab order. The old rule hid the *whole*
+collapsed pane with `visibility: hidden`; keep that and the strip — now the only way back — becomes
+unreachable. The rule is scoped to `.ws-pane-content`, and re-measured: 40 `Tab` presses with both
+panes collapsed landed inside `.ws-rail` 6 times and inside `.ws-detail` 6 times, every one of them
+on the strip's own button, and never on any of the rail's other 25 focusable controls. The
+attention badge moved onto that button too, which is strictly better than the topbar badge it
+replaces — the warning now sits on the thing that is hiding it.
+
+Stacked, below 1100px, a vertical label in a full-width row would be nonsense, so the strip becomes
+the horizontal bar the block collapses to (900×27px measured) and only the block's *content* gets
+`display: none`. That is safe here in a way it is not above the breakpoint: stacked, the document
+scrolls and the panes are `overflow: visible`, so there is no pane scroll offset for it to discard.
+The alternative — hiding the whole block, as the first version did — would have taken the only
+reopen control with it.
+
+Suite: `cargo test --workspace` 193/0 first run, `cargo fmt --all --check` and `cargo clippy
+--all-targets --all-features -- -D warnings` clean, `npm run typecheck` clean, `npm run test` 8
+files / 98 tests. No new dependencies — the chevron is an inline SVG, which is what the
+`default-src 'self'` CSP leaves room for.
+
 ## Ideas for later
 
 - Resizable rail/detail panes, deliberately deferred by `frontend-three-pane-layout`'s Non-Goals
@@ -2030,13 +2434,6 @@ assets byte-identical across two rebuilds.
   be incomplete before they hit it — `filtering-and-search` only fixed the chip-count DOM-size
   problem (`CHIP_LIST_MAX_VALUES`), not the underlying "cap reached silently" case for a field that
   still renders as a normal value list.
-- Rework the virtual-scrolled table's row positioning off inline `element.style.transform`/
-  `.style.height` and onto generated stylesheet rules (`CSSStyleSheet.insertRule` or similar), so
-  the CSP's `style-src` could drop back to bare `'self'` without `'unsafe-inline'`
-  (`release-hardening`) — not attempted in this change, a larger, riskier rework of code already
-  measured and tuned (`timeline-and-table`'s 50k-row/~17ms-per-frame result) for a narrow security
-  gain (no code execution is possible via CSS injection alone, and this app never renders
-  attacker-controlled CSS).
 - A CI/build check that would have caught this change's own "`cargo build` served stale
   `include_bytes!`-embedded assets after `scripts/build-frontend.sh` changed their content"
   bug automatically (e.g. hash the running server's `/assets/*` responses against the source
