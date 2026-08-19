@@ -124,7 +124,9 @@ feature-freezes on day 25 — nothing new gets added to MVP scope after that.
 
 ## GIT
 
-- **Do not commit docs and openspec artifacts**
+- **Commit docs and openspec artifacts along with the code they describe.** The specs
+  say what the code is supposed to do and the archived changes say why it was built
+  that way; a clone without them is a clone that cannot answer either question.
 
 ## UI
 
