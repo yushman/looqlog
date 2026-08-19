@@ -64,7 +64,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
 /// `security` spec, "Content Security Policy on every response". `default-src
 /// 'self'` covers `connect-src`/`worker-src` by fallback (same-origin `/ws` and the
-/// `assets/worker.js` Worker need nothing extra). Two deliberate additions beyond
+/// `assets/worker.js` Worker need nothing extra). One deliberate addition beyond
 /// bare `default-src 'self'` (design.md D2 — verified against a real Chromium
 /// instance via Playwright, not assumed):
 ///
@@ -74,28 +74,24 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 ///   `'wasm-unsafe-eval'` grants exactly that (WASM compilation only — unlike
 ///   `'unsafe-eval'`, it does not permit `eval()`/`new Function()` on arbitrary
 ///   strings).
-/// - `'unsafe-inline'` on `style-src`: the virtual-scrolled entry table
-///   (`looq-entry-table.ts`) positions rows via `element.style.transform`/
-///   `.style.height` on every scroll — that's how the 50k-row/~17ms-per-frame
-///   result in `docs/devlog.md` was achieved, and a bare `default-src 'self'`
-///   blocks it outright (confirmed: opening a file with the bare policy produced
-///   144 "Applying inline style violates ... default-src 'self'" console errors
-///   and a table that never rendered any row). Style injection has a much
-///   narrower attack surface than script injection (no code execution), and this
-///   app never renders attacker-controlled CSS — accepted as a smaller
-///   concession than reworking the virtual scroller onto generated stylesheet
-///   rules just to keep `style-src` as strict as `script-src`.
 ///
-/// With both, the WASM module compiles, the worker starts, the table renders, and
-/// no CSP violation is reported in the console. Firefox and Safari are PRD §11
-/// targets this sandbox cannot drive interactively — recorded as an environment
-/// limitation in docs/devlog.md, not silently assumed to pass.
+/// `style-src` stays as strict as `default-src`: the virtual-scrolled entry table
+/// inserts its row-positioning rules into the already-linked `/assets/index.css`
+/// through the CSS object model instead of writing `style` attributes
+/// (`looq-entry-table.ts`, `resizable-table-columns` design D2), so nothing on the
+/// page needs `'unsafe-inline'`.
+///
+/// With this policy the WASM module compiles, the worker starts, the table renders
+/// and scrolls its full dataset, and no CSP violation is reported in the console.
+/// Firefox and Safari are PRD §11 targets this sandbox cannot drive interactively —
+/// recorded as an environment limitation in docs/devlog.md, not silently assumed to
+/// pass.
 async fn add_security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'",
+            "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'",
         ),
     );
     response

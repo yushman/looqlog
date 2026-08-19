@@ -843,6 +843,18 @@ fn every_response_carries_the_csp_header() {
         lower.contains("default-src 'self'"),
         "expected default-src 'self':\n{headers}"
     );
+    // `security` spec, "Inline styles are not permitted": the virtual scroller
+    // positions rows through CSSOM rules in the linked stylesheet, so `style-src`
+    // is as strict as `default-src`. A reappearing `'unsafe-inline'` would be a
+    // silent widening of the policy.
+    assert!(
+        lower.contains("style-src 'self'"),
+        "expected style-src 'self':\n{headers}"
+    );
+    assert!(
+        !lower.contains("'unsafe-inline'"),
+        "expected no 'unsafe-inline' anywhere in the policy:\n{headers}"
+    );
 
     let _ = child.kill();
     let _ = child.wait();
