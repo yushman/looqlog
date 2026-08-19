@@ -1,0 +1,174 @@
+name: Release
+
+# `packaging` spec, "A version tag publishes downloadable binaries" (design D1): a
+# `v*` tag is the single source of truth for what shipped. This workflow never
+# invokes wasm-pack or npm — the frontend artifacts are vendored in
+# crates/looq/assets/ (ADR-0008), and CI's frontend-artifact-staleness job already
+# guards their freshness on every push to main.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # design D1: the tag is the single source of truth. Fail before any binary is
+  # built rather than publish one whose `--version` output contradicts its own
+  # release.
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches the workspace version in Cargo.toml
+        id: version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match workspace version ${PKG_VERSION} in Cargo.toml"
+            exit 1
+          fi
+          echo "version=${PKG_VERSION}" >> "$GITHUB_OUTPUT"
+
+  # design D2: musl for Linux (static, no glibc floor). Each job smoke-tests the
+  # binary it just built (design D3) and records its size (design D4) before
+  # anything is staged for the publish job.
+  build:
+    needs: check-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          # design D7: a native Intel runner, not macos-latest (arm64) — its image
+          # does not list Rosetta 2, so an x86_64 binary built there could not be
+          # smoke-tested on the machine that built it.
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.check-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl-tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked -p looq --target ${{ matrix.target }}
+
+      - name: Locate built binary
+        id: bin
+        shell: bash
+        run: |
+          EXT=""
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            EXT=".exe"
+          fi
+          echo "path=target/${{ matrix.target }}/release/looq${EXT}" >> "$GITHUB_OUTPUT"
+          echo "ext=${EXT}" >> "$GITHUB_OUTPUT"
+
+      # design D3: proves the artifact runs, not just that it links. Same four
+      # checks on every target, `shell: bash` everywhere (Git Bash on Windows).
+      - name: Smoke test
+        shell: bash
+        run: ./scripts/smoke-release-binary.sh "${{ steps.bin.outputs.path }}" "${{ env.VERSION }}"
+
+      # design D4: recorded on every target, enforced on Linux x86_64.
+      - name: Measure size
+        id: size
+        shell: bash
+        run: |
+          BYTES=$(wc -c < "${{ steps.bin.outputs.path }}" | tr -d ' ')
+          MIB=$(awk "BEGIN { printf \"%.2f\", ${BYTES}/1048576 }")
+          echo "bytes=${BYTES}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### looq ${{ matrix.target }}"
+            echo "Size: ${BYTES} bytes (~${MIB} MiB)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce TDR §5 budget (~10 MB, Linux x86_64 only)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        shell: bash
+        run: |
+          BUDGET=$((10 * 1024 * 1024))
+          if [ "${{ steps.size.outputs.bytes }}" -gt "${BUDGET}" ]; then
+            echo "::error::linux x86_64 binary is ${{ steps.size.outputs.bytes }} bytes, over the TDR §5 ~10MB budget (${BUDGET} bytes)"
+            exit 1
+          fi
+
+      - name: Stage release asset
+        id: stage
+        shell: bash
+        run: |
+          ASSET_NAME="looq-${VERSION}-${{ matrix.target }}${{ steps.bin.outputs.ext }}"
+          mkdir -p dist
+          cp "${{ steps.bin.outputs.path }}" "dist/${ASSET_NAME}"
+          echo "${{ steps.size.outputs.bytes }}" > "dist/${ASSET_NAME}.size"
+          echo "asset_name=${ASSET_NAME}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage.outputs.asset_name }}
+          path: dist/
+
+  # A target that fails to build or smoke-test never reaches this job, so it never
+  # reaches the Releases page (design D3).
+  publish:
+    needs: [check-version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble release body with recorded sizes (design D4)
+        shell: bash
+        run: |
+          {
+            echo "## looq ${VERSION}"
+            echo
+            echo "Binary sizes against TDR §5's budget (~10 MB for Linux x86_64, ~10.5 MB total):"
+            echo
+            for f in artifacts/*/*.size; do
+              asset="$(basename "$f" .size)"
+              bytes="$(cat "$f")"
+              mib=$(awk "BEGIN { printf \"%.2f\", ${bytes}/1048576 }")
+              echo "- \`${asset}\`: ${bytes} bytes (~${mib} MiB)"
+            done
+          } > release-body.md
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+
+      - name: Collect binary assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f ! -name '*.size' -exec cp {} release-assets/ \;
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: looq ${{ needs.check-version.outputs.version }}
+          body_path: release-body.md
+          files: release-assets/*

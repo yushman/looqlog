@@ -2381,6 +2381,102 @@ Suite: `cargo test --workspace` 193/0 first run, `cargo fmt --all --check` and `
 files / 98 tests. No new dependencies — the chevron is an inline SVG, which is what the
 `default-src 'self'` CSP leaves room for.
 
+## 2026-08-19 — `ship-0-1-0-release`: a `v*` tag now produces something a stranger can download
+
+Closed the two debts `release-hardening` recorded as owed: a real Linux x86_64 release build, and
+clean-machine verification. Both needed a machine this project's own sandbox never had — no
+Docker, no VM, no cross-linker (`zig`/`musl-gcc`/`x86_64-unknown-linux-gnu-gcc` all absent, still).
+A GitHub Actions runner supplies both at once: it cross-compiles, and by construction it has never
+seen this project's dev environment.
+
+**Shipped:**
+- `.github/workflows/release.yml`: triggered on `push: tags: ['v*']`, `permissions: contents:
+  write` only. First job fails the whole run before any build if the tag doesn't match the
+  workspace `version` in `Cargo.toml` (design D1) — a `v0.2.0` tag on a `0.1.0` tree now fails
+  loudly instead of shipping binaries whose `--version` contradicts their own release. Build matrix:
+  `x86_64-unknown-linux-musl` (static, no glibc floor — design D2), `aarch64-apple-darwin`,
+  `x86_64-apple-darwin`, `x86_64-pc-windows-msvc`. Never invokes `wasm-pack`/npm — builds against
+  the vendored `crates/looq/assets/` (ADR-0008), which CI's `frontend-artifact-staleness` job
+  already guards on every push to `main`. Each target job smoke-tests its own freshly built binary,
+  records its size to the job summary, and only the Linux job enforces the TDR §5 ~10 MB budget
+  (design D4) — a size regression fails the build rather than shipping unnoticed. A final `publish`
+  job, gated on all four build jobs, creates the GitHub Release and attaches every asset
+  (`looq-<version>-<target>`), with the recorded sizes and the TDR §5 budget written into the
+  release body so the numbers outlive the build logs.
+- `scripts/smoke-release-binary.sh`: the same four checks on every target, `shell: bash`
+  everywhere including Git Bash on Windows — `--version` matches the expected version exactly,
+  `--help` names every TDR §6 flag, the server serves `/` (200, non-empty body) and
+  `/wasm/core.wasm` (200, `application/wasm`) on a fixed port (not `--port 0`, so the script
+  doesn't have to parse stdout for it), and a line piped into stdin mode reaches a WebSocket
+  client on `/ws` — handshake, auth-token exchange and frame decode done by hand in a small
+  embedded Python block (stdlib only: `socket`/`struct`/`base64`), since no WS client tool is
+  guaranteed present on all three runner OSes. Every failure path prints expected vs. observed
+  and exits non-zero; verified locally against `target/release/looq` (all six checks pass), then
+  deliberately run with the wrong expected version to confirm it fails loudly (`exit 1`,
+  `expected: looq 9.9.9` / `observed: looq 0.1.0`).
+- **Constraint that shaped the smoke test (design D3), worth restating so nobody rediscovers it by
+  writing a test that silently asserts the wrong thing:** `mode_for` in `crates/looq/src/cli.rs`
+  picks stdin mode whenever stdin isn't a TTY, and a CI runner's stdin is never a TTY —
+  `< /dev/null` doesn't make it one. So `looq some.log` on any of the four runners selects stdin
+  mode regardless of the path argument; there is no way to exercise file mode headlessly on a
+  runner. That's fine, not a gap: file mode is client-side by construction (ADR-0002/ADR-0007) —
+  the backend's whole file-mode duty is printing a hint string, never reading the file — so a pty
+  (which would force a TTY on Linux/macOS but has no Windows equivalent, and would make the four
+  targets' checks uneven) would only add coverage of that hint string, not of parsing.
+- `Cargo.toml`'s `repository` and both READMEs' clone URL moved from the nonexistent
+  `looq-dev/looq` to the real remote, `https://github.com/yushman/openlogviewer` (confirmed via
+  `git ls-remote` and `cargo metadata`). `LICENSE` added (MIT, matching the already-declared
+  `license` field). Both READMEs' Install sections rewritten: download-and-run from Releases is
+  now the primary path, `cargo install looq` stays marked as planned (irreversible, needs the
+  maintainer's own token), and a new subsection states plainly that only `aarch64-apple-darwin`
+  (this project's own dev machine) has been run by hand through the three PRD flows — the other
+  three ship verified by the automated smoke test only.
+
+**Measurements — what this agent's sandbox could and couldn't produce (real numbers, exact
+command):**
+- `cargo build --release -p looq` on this sandbox (`aarch64-apple-darwin`, confirmed via `rustc
+  -vV`): **2,392,608 bytes** (`wc -c < target/release/looq`) — unchanged from `release-hardening`'s
+  number, since no crate source changed in this release, only metadata/docs. `core.wasm`: **210,379
+  bytes** (`wc -c < crates/looq/assets/wasm/core.wasm`) — up from `release-hardening`'s 190.6 KB,
+  reflecting the parser features shipped since (`prefix-and-payload-parsing`,
+  `logcat-and-payload-precision`, `resizable-table-columns`), not this change. TS bundle:
+  `gzip -9 -c web/dist/assets/index.js | wc -c` → 45,530 B, `index.css` → 4,293 B, combined
+  ~49,823 B. Against TDR §5: binary 2.28 MiB vs ~10 MB (77% headroom), wasm 205.4 KiB vs ~300 KB
+  (32% headroom), TS bundle ~48.7 KiB gzipped vs <200 KB (76% headroom) — all measured on macOS
+  arm64, not the Linux x86_64 TDR §5 names as the minimum target.
+- **The Linux x86_64 number, and the Intel-mac and Windows numbers, do not exist yet in this
+  devlog** — this sandbox still has no cross-linker toolchain (`rustup target list --installed`
+  shows only `aarch64-apple-darwin` and `wasm32-unknown-unknown`; no `musl-gcc`, `zig`, Docker).
+  That is exactly the gap `release.yml`'s CI runners close: `x86_64-unknown-linux-musl` builds on
+  `ubuntu-latest` with `musl-tools`, `aarch64-apple-darwin` builds on `macos-latest`,
+  `x86_64-apple-darwin` on the native Intel runner `macos-15-intel` (design D7), and
+  `x86_64-pc-windows-msvc` on `windows-latest` — none of that could be exercised locally, and none of the four target jobs'
+  actual size numbers or `--version`/`--help`/`/ws` smoke-test results are known until the tag is
+  pushed and the workflow runs. Recorded here as owed to the *next* devlog entry, written after
+  `v0.1.0` is tagged (task 6.1, the maintainer's own action) and the workflow has actually run —
+  not silently assumed to pass because it validated locally.
+
+**Verification:** `cargo test --workspace` 193/0 (19 `looq` unit + 27 `cli.rs` integration + 114
+`looq-core` unit + 33 `parser_integration.rs`), `cargo fmt --all -- --check` clean, `cargo clippy
+--workspace --all-targets -- -D warnings` clean, `npm run typecheck` clean, `npm run test` 8 files
+/ 98 tests, `openspec validate ship-0-1-0-release --strict` passes. **Not verified locally, and
+cannot be:** the workflow itself only runs on GitHub's infrastructure — YAML-parsed
+(`python3 -c "import yaml"`) and every `uses:` ref confirmed to resolve to a real tag/branch, but
+never actually executed by this agent.
+
+**One defect caught by reviewing the workflow instead of trusting it (tasks 7.1–7.4).** The
+implementation put both macOS targets on `macos-latest`, which is arm64. Building
+`x86_64-apple-darwin` there is fine — Apple's toolchain cross-compiles — but design D3 requires
+the binary to be *run* on the machine that built it, and running an x86_64 binary on an arm64
+host needs Rosetta 2, which the `macos-15-arm64` runner image does not list among its installed
+software. That would have failed with `Bad CPU type in executable` on the tag push, after three
+targets had already built — the most expensive moment to discover it, since a tag is public and
+awkward to retract. Fixed by building that target on `macos-15-intel`, a native Intel runner
+label GitHub still offers, which also keeps the READMEs' claim that every asset is
+"smoke-tested on its own platform" literally true rather than true-modulo-translation. Recorded
+as design D7 specifically so the two macOS targets sharing no runner label doesn't get tidied
+back into one.
+
 ## Ideas for later
 
 - Resizable rail/detail panes, deliberately deferred by `frontend-three-pane-layout`'s Non-Goals

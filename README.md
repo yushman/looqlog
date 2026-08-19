@@ -33,9 +33,23 @@ timeline-driven UI in your own browser — privacy-first, zero config.
 
 ## Install
 
+Download a prebuilt binary from the
+[Releases page](https://github.com/yushman/openlogviewer/releases/latest), matching
+your platform:
+
 ```bash
-cargo install looq   # planned — not published yet
+# Linux x86_64 (statically linked, runs on any distribution)
+curl -LO https://github.com/yushman/openlogviewer/releases/latest/download/looq-0.1.0-x86_64-unknown-linux-musl
+chmod +x looq-0.1.0-x86_64-unknown-linux-musl
+./looq-0.1.0-x86_64-unknown-linux-musl --version
 ```
+
+Also published for `aarch64-apple-darwin`, `x86_64-apple-darwin` and
+`x86_64-pc-windows-msvc`. Every asset is smoke-tested on its own platform before
+being published — see "Which platforms are verified how" below.
+
+`cargo install looq` is planned but not published yet — publishing to crates.io is
+irreversible and needs the maintainer's own token, so it isn't done casually.
 
 Building from source needs only the Rust toolchain — the compiled frontend
 (`core.wasm` + JS glue) is committed to the repository, so `cargo build`/`cargo
@@ -43,16 +57,23 @@ install` never invoke Node.js or `wasm-pack` (see
 [ADR-0008](docs/adr/0008-vendored-frontend-artifacts.md)):
 
 ```bash
-git clone https://github.com/looq-dev/looq
-cd looq
+git clone https://github.com/yushman/openlogviewer
+cd openlogviewer
 cargo build --release
 ./target/release/looq --version
 ```
 
-A prebuilt release binary will be published once v0.1.0 ships (see Releases). The
-release target is Linux x86_64 at minimum (TDR §5); sizes recorded for both that
-target and the platform this repo's own release build was actually produced on are
-in `docs/devlog.md`'s `release-hardening` entry.
+### Which platforms are verified how
+
+Every release binary passes the same automated smoke test (server starts, serves
+the page and `core.wasm`, streams a piped stdin line over `/ws`) before it is
+published — see `.github/workflows/release.yml`. Beyond that, only
+`aarch64-apple-darwin` has been run by hand through the three PRD usage flows
+during development (it's this project's own dev machine). `x86_64-unknown-linux-musl`,
+`x86_64-apple-darwin` (Intel Mac) and `x86_64-pc-windows-msvc` ship verified only by
+the automated smoke test — their evidence beyond that is a pure-Rust dependency tree
+with no `target_os`-specific code and `webbrowser` supporting all three. If one of
+them turns out broken in practice, that's a bug report worth filing.
 
 ### Frontend development
 

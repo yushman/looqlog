@@ -34,9 +34,22 @@ live-потока из stdin. Парсинг происходит в WebAssembly
 
 ## Установка
 
+Скачайте готовый бинарь со [страницы Releases](https://github.com/yushman/openlogviewer/releases/latest)
+под свою платформу:
+
 ```bash
-cargo install looq   # запланировано — ещё не опубликовано
+# Linux x86_64 (статически слинкован, работает на любом дистрибутиве)
+curl -LO https://github.com/yushman/openlogviewer/releases/latest/download/looq-0.1.0-x86_64-unknown-linux-musl
+chmod +x looq-0.1.0-x86_64-unknown-linux-musl
+./looq-0.1.0-x86_64-unknown-linux-musl --version
 ```
+
+Также публикуются сборки для `aarch64-apple-darwin`, `x86_64-apple-darwin` и
+`x86_64-pc-windows-msvc`. Каждый артефакт проходит автоматический smoke-тест на
+своей платформе перед публикацией — см. «Какие платформы проверены как» ниже.
+
+`cargo install looq` запланирован, но ещё не опубликован — публикация в crates.io
+необратима и требует токена мейнтейнера, так что походя её не делают.
 
 Для сборки из исходников нужен только Rust toolchain — собранный фронтенд
 (`core.wasm` + JS-обвязка) закоммичен в репозиторий, поэтому `cargo build`/`cargo
@@ -44,16 +57,23 @@ install` никогда не вызывают Node.js или `wasm-pack` (см.
 [ADR-0008](docs/adr/0008-vendored-frontend-artifacts.md)):
 
 ```bash
-git clone https://github.com/looq-dev/looq
-cd looq
+git clone https://github.com/yushman/openlogviewer
+cd openlogviewer
 cargo build --release
 ./target/release/looq --version
 ```
 
-Готовый бинарь появится в Releases после релиза v0.1.0. Целевая платформа релиза —
-Linux x86_64 как минимум (TDR §5); размеры, зафиксированные и для неё, и для
-платформы, на которой реально собирался релизный бинарь в этом репозитории, — в
-записи `release-hardening` в `docs/devlog.md`.
+### Какие платформы проверены как
+
+Каждый релизный бинарь проходит один и тот же автоматический smoke-тест (сервер
+стартует, отдаёт страницу и `core.wasm`, стримит строку из stdin через `/ws`) перед
+публикацией — см. `.github/workflows/release.yml`. Помимо этого, вручную через три
+PRD-флоу прогонялась только `aarch64-apple-darwin` (это машина разработки самого
+проекта). `x86_64-unknown-linux-musl`, `x86_64-apple-darwin` (Intel Mac) и
+`x86_64-pc-windows-msvc` проверены только автоматическим smoke-тестом — помимо него
+за них говорит чисто Rust-зависимости без `target_os`-специфичного кода и то, что
+`webbrowser` поддерживает все три. Если какая-то из них окажется сломанной на
+практике — заводите баг-репорт.
 
 ### Разработка фронтенда
 
