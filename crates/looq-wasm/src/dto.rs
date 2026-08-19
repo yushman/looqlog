@@ -46,6 +46,12 @@ pub struct EntryDto {
     /// RFC 3339, `null` when the line carried no recognisable timestamp.
     pub timestamp: Option<String>,
     pub timestamp_used_default_tz: bool,
+    /// True when the line's timestamp shape carried no year and one was inferred from
+    /// the caller-supplied reference instant (`prefix-and-payload-parsing` design.md
+    /// D4). Crosses alongside `timestamp_used_default_tz` for the same reason: an
+    /// entry dated by assumption must be distinguishable in the UI from one dated by
+    /// the log.
+    pub timestamp_year_inferred: bool,
     /// Canonical uppercase level name (`"INFO"`, `"ERROR"`, ...), `null` when absent.
     pub level: Option<String>,
     pub message: String,
@@ -58,6 +64,7 @@ impl From<&Entry> for EntryDto {
             ordinal: entry.ordinal,
             timestamp: entry.timestamp.map(|ts| ts.to_rfc3339()),
             timestamp_used_default_tz: entry.timestamp_used_default_tz,
+            timestamp_year_inferred: entry.timestamp_year_inferred,
             level: entry.level.map(|l| l.as_str().to_string()),
             message: entry.message.clone(),
             fields: entry
@@ -75,8 +82,16 @@ pub struct DetectionResultDto {
     pub format: String,
     pub match_fraction: f64,
     /// `"threshold"` when a candidate crossed the detection threshold outright,
-    /// `"fallback"` when plain text was chosen because nothing did.
+    /// `"fallback"` when plain text was chosen because nothing did. No new variant was
+    /// added for prefixed plain text — it reports `"threshold"` like any other match
+    /// (`prefix-and-payload-parsing` design.md D9).
     pub outcome: String,
+    /// Which timestamp shape the sample matched (`"iso8601"`, `"syslog3164"`,
+    /// `"klog"`, `"clf"`, `"slash-date"`, `"epoch"`) and at which head offset, or
+    /// `null` for structured formats and for input with no recognised prefixes. This
+    /// is what lets the UI say *how* plain text matched instead of only that it did.
+    pub timestamp_shape: Option<String>,
+    pub timestamp_offset: Option<usize>,
 }
 
 impl From<&DetectionResult> for DetectionResultDto {
@@ -88,6 +103,8 @@ impl From<&DetectionResult> for DetectionResultDto {
                 DetectionOutcome::Threshold => "threshold".to_string(),
                 DetectionOutcome::Fallback => "fallback".to_string(),
             },
+            timestamp_shape: result.timestamp_shape.map(|s| s.as_str().to_string()),
+            timestamp_offset: result.timestamp_offset,
         }
     }
 }

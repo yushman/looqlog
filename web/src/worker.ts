@@ -54,7 +54,13 @@ const api: ParserWorkerApi = {
     // Discard the previous instance (design.md D4) before constructing the new one.
     active?.handle.free();
     const id = nextSessionId++;
-    active = { id, handle: new ParserHandle(formatOverride, tzOffsetMinutes) };
+    // `Date.now()` is read here, not in `looq-core`: ADR-0005 keeps that crate
+    // target-agnostic and clock-free, so the reference instant year-less timestamp
+    // shapes (syslog RFC 3164 `Aug  8 17:42:01`, klog `0808 17:42:01`) need to be
+    // dated at all is supplied by the caller. Read per session rather than once at
+    // module load, so a long-lived tab does not date a file opened tomorrow against
+    // the instant the tab was opened.
+    active = { id, handle: new ParserHandle(formatOverride, tzOffsetMinutes, Date.now()) };
     return id;
   },
 

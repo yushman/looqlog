@@ -74,13 +74,33 @@ function renderEntryHtml(entry: EntryDto, compiled: CompiledQuery): string {
   return `
     <dl class="detail-core">
       <dt>ordinal</dt><dd>${entry.ordinal}</dd>
-      <dt>timestamp</dt><dd>${entry.timestamp ? escapeHtml(entry.timestamp) + " (UTC)" : "no timestamp extracted"}</dd>
+      <dt>timestamp</dt><dd>${renderTimestamp(entry)}</dd>
       <dt>level</dt><dd>${entry.level ? escapeHtml(entry.level) : "no level extracted"}</dd>
     </dl>
     <p class="detail-message-label">message</p>
     <pre class="detail-message">${highlightHtml(entry.message, compiled)}</pre>
     ${fieldRows ? `<p class="detail-fields-label">fields</p><table class="detail-fields">${fieldRows}</table>` : ""}
   `;
+}
+
+/** The timestamp plus every assumption that went into it. Both flags are here for the
+ * same reason: an entry dated by inference sits at a point on the timeline the log
+ * never stated, and a user who cannot see that has no way to distinguish it from a
+ * fact. `timestampYearInferred` fires on the year-less shapes (syslog RFC 3164, klog),
+ * where the year comes from the reference instant the worker passes in. */
+function renderTimestamp(entry: EntryDto): string {
+  if (!entry.timestamp) {
+    return "no timestamp extracted";
+  }
+  const notes: string[] = ["UTC"];
+  if (entry.timestampUsedDefaultTz) {
+    notes.push("zone assumed — the value carried no offset");
+  }
+  if (entry.timestampYearInferred) {
+    notes.push("year inferred — this timestamp shape carries none");
+  }
+  const assumed = entry.timestampUsedDefaultTz || entry.timestampYearInferred;
+  return `${escapeHtml(entry.timestamp)} <span class="${assumed ? "detail-assumed" : ""}">(${escapeHtml(notes.join("; "))})</span>`;
 }
 
 function renderFieldValue(value: FieldValueDto): string {

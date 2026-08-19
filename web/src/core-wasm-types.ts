@@ -33,7 +33,15 @@ export interface ParserHandleInstance {
 }
 
 export interface ParserHandleConstructor {
-  new (formatOverride?: string, tzOffsetMinutes?: number): ParserHandleInstance;
+  /** `referenceMs`: the caller's "now" as epoch milliseconds, used to infer a year for
+   * timestamp shapes that carry none (syslog RFC 3164, klog). `looq-core` never reads
+   * the clock itself (ADR-0005), so omitting this leaves those shapes unrecognised —
+   * an empty timeline for syslog and k8s logs. worker.ts passes `Date.now()`. */
+  new (
+    formatOverride?: string,
+    tzOffsetMinutes?: number,
+    referenceMs?: number,
+  ): ParserHandleInstance;
 }
 
 export interface CoreWasmModule {

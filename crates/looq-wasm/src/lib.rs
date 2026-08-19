@@ -55,10 +55,18 @@ impl ParserHandle {
     /// auto-detect. `tz_offset_minutes`: a fixed UTC offset (minutes east) applied to
     /// timestamps with no explicit offset; `undefined` defaults to UTC (named IANA
     /// zones are out of scope — see `crates/looq-core/src/timestamp.rs`).
+    /// `reference_ms`: the caller's "now" as epoch milliseconds (`Date.now()` in
+    /// `web/src/worker.ts`), used to infer a year for the shapes that carry none —
+    /// syslog RFC 3164, klog (`prefix-and-payload-parsing` design.md D4). It crosses
+    /// the boundary rather than being read inside `looq-core` because ADR-0005
+    /// requires that crate to stay target-agnostic and clock-free. Without it those
+    /// shapes are not recognised at all, so a syslog or klog file gets an empty
+    /// timeline.
     #[wasm_bindgen(constructor)]
     pub fn new(
         format_override: Option<String>,
         tz_offset_minutes: Option<i32>,
+        reference_ms: Option<f64>,
     ) -> Result<ParserHandle, JsValue> {
         let format = match format_override {
             Some(raw) => Some(
@@ -75,8 +83,14 @@ impl ParserHandle {
             }
             None => looq_core::TimeZonePolicy::utc(),
         };
+        let mut ctx = looq_core::ParseContext::new(tz);
+        if let Some(ms) = reference_ms {
+            let reference = chrono::DateTime::from_timestamp_millis(ms as i64)
+                .ok_or_else(|| JsValue::from_str("reference_ms out of range"))?;
+            ctx = ctx.with_reference(reference);
+        }
         Ok(ParserHandle {
-            inner: looq_core::Parser::new(format, tz),
+            inner: looq_core::Parser::with_context(format, ctx),
         })
     }
 
