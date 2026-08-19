@@ -23,7 +23,9 @@ import "./looq-entry-detail";
 import "./looq-filter-bar";
 import "./looq-workspace";
 
+import { DEFAULT_COLUMN_WIDTHS, type ColumnWidths } from "../column-widths";
 import { LiveTailSession, type ConnectionState } from "../live-tail";
+import type { CollapsiblePane } from "../panes";
 import { matchesFieldFilters, matchesQuery, type CompiledQuery, type FieldFilters } from "../predicate";
 import type { TimeRange } from "../time-range";
 import { readAuthToken } from "../token";
@@ -34,7 +36,7 @@ import type { LooqEntryDetail } from "./looq-entry-detail";
 import type { LooqEntryTable } from "./looq-entry-table";
 import type { FiltersChangeDetail, LooqFilterBar } from "./looq-filter-bar";
 import type { LooqTimeline } from "./looq-timeline";
-import type { LooqWorkspace } from "./looq-workspace";
+import { PANES_CHANGE_EVENT, type LooqWorkspace } from "./looq-workspace";
 
 // D6 batches rendering so a fast producer doesn't turn every line into a layout
 // pass, but TDR §11's end-to-end live-tail latency target is <100ms — chosen well
@@ -79,8 +81,16 @@ export class LooqLiveTail extends HTMLElement {
   // affordance, not read one on connect.
   private fieldFilters: FieldFilters = new Map();
   private compiledQuery: CompiledQuery = { kind: "none" };
+  /** Same mirroring as `looq-app.ts`: the table owns the drag, this shell owns
+   * what the copy-link affordance puts in the URL. */
+  private columnWidths: ColumnWidths = DEFAULT_COLUMN_WIDTHS;
+  /** Same mirroring again: the workspace owns the toggles, this shell owns what
+   * the copy-link affordance puts in the URL. Only written, never read on connect,
+   * for the reason given above. */
+  private collapsedPanes: Set<CollapsiblePane> = new Set();
   private readonly hashWriter = new HashWriter();
 
+  private workspace!: LooqWorkspace;
   private stateEl!: HTMLSpanElement;
   private rateEl!: HTMLSpanElement;
   private evictionEl!: HTMLParagraphElement;
@@ -102,6 +112,7 @@ export class LooqLiveTail extends HTMLElement {
     // of the panes differ, never the arrangement.
     this.innerHTML = `<looq-workspace></looq-workspace>`;
     const ws = this.querySelector("looq-workspace") as LooqWorkspace;
+    this.workspace = ws;
 
     ws.pane("topbar").innerHTML = `
       <span class="ws-mode">stdin stream</span>
@@ -168,7 +179,20 @@ export class LooqLiveTail extends HTMLElement {
       this.handleTableScroll((event as CustomEvent<number>).detail);
     });
     this.tableEl.addEventListener("selection-change", (event) => {
-      this.detailEl.setSelectedOrdinal((event as CustomEvent<number | null>).detail);
+      const ordinal = (event as CustomEvent<number | null>).detail;
+      this.detailEl.setSelectedOrdinal(ordinal);
+      // D4, same as file mode: a selection must never look like it did nothing.
+      if (ordinal !== null) {
+        this.workspace.expandPane("detail");
+      }
+    });
+    this.workspace.addEventListener(PANES_CHANGE_EVENT, (event) => {
+      this.collapsedPanes = (event as CustomEvent<Set<CollapsiblePane>>).detail;
+      this.scheduleHashWrite();
+    });
+    this.tableEl.addEventListener("columns-change", (event) => {
+      this.columnWidths = (event as CustomEvent<ColumnWidths>).detail;
+      this.scheduleHashWrite();
     });
     this.timelineEl.addEventListener("range-change", (event) => {
       this.setActiveRange((event as CustomEvent<TimeRange | null>).detail);
@@ -260,6 +284,8 @@ export class LooqLiveTail extends HTMLElement {
       query: this.filterBarEl?.getState().queryText ?? "",
       formatOverride: null,
       tzOffsetMinutes: null,
+      columnWidths: this.columnWidths,
+      collapsedPanes: this.collapsedPanes,
     });
   }
 

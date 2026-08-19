@@ -16,8 +16,10 @@ import "./looq-workspace";
 
 import { ParseCancelledError, ParserBridge, WorkerInitError, type ParseProgress } from "../bridge";
 import { looksBinary, SNIFF_BYTES } from "../binary-detect";
+import { DEFAULT_COLUMN_WIDTHS, type ColumnWidths } from "../column-widths";
 import { EntryIndex } from "../entry-index";
 import { formatBytes, HARD_CAP_BYTES, WARN_THRESHOLD_BYTES } from "../limits";
+import type { CollapsiblePane } from "../panes";
 import { knownFieldNames, matchesFieldFilters, matchesQuery, type CompiledQuery, type FieldFilters } from "../predicate";
 import type { TimeRange } from "../time-range";
 import { decodeHash, HashWriter, type DecodedHash } from "../url-hash";
@@ -29,7 +31,7 @@ import type { LooqEntryDetail } from "./looq-entry-detail";
 import type { LooqEntryTable } from "./looq-entry-table";
 import type { FiltersChangeDetail, LooqFilterBar } from "./looq-filter-bar";
 import type { LooqTimeline } from "./looq-timeline";
-import type { LooqWorkspace } from "./looq-workspace";
+import { PANES_CHANGE_EVENT, type LooqWorkspace } from "./looq-workspace";
 
 // No "error" state here (`error-states` spec, design.md D5): a failed open must
 // not destroy what's already loaded, so an error is a separate, persistent banner
@@ -111,6 +113,13 @@ export class LooqApp extends HTMLElement {
   private fieldInventory: FieldInventoryDto | null = null;
   private formatOverride: string | null = null;
   private tzOffsetMinutes: number | null = null;
+  /** The table's column widths, mirrored here because the hash is shell state
+   * (D7): the table owns the interaction, the shell owns what goes in the URL. */
+  private columnWidths: ColumnWidths = DEFAULT_COLUMN_WIDTHS;
+  /** Which side panes are collapsed, mirrored here for the same reason as the
+   * column widths (D7): the workspace owns the interaction, the shell owns what
+   * goes in the URL. */
+  private collapsedPanes: Set<CollapsiblePane> = new Set();
   private readonly hashWriter = new HashWriter();
   /** Parsed once at connect from whatever hash the page loaded with; applied
    * exactly once, right after the first successful parse, then discarded — a
@@ -263,6 +272,13 @@ export class LooqApp extends HTMLElement {
     // range need a dataset to validate and render against.
     if (location.hash.length > 1) {
       this.pendingHash = decodeHash(location.hash);
+      // Collapsed panes are the one part applied straight away: unlike chips and
+      // the range they need no dataset to validate against, and a link that says
+      // "no rail" should not show a rail for as long as it takes to pick a file.
+      // What could NOT be applied is still reported with the rest, in
+      // `applyPendingHash`.
+      this.collapsedPanes = this.pendingHash.collapsedPanes;
+      ws.setCollapsedPanes(this.collapsedPanes);
     }
 
     this.dropTarget.setHintHtml(hintHtml);
@@ -279,7 +295,26 @@ export class LooqApp extends HTMLElement {
       this.setActiveRange((event as CustomEvent<TimeRange | null>).detail);
     });
     this.tableEl.addEventListener("selection-change", (event) => {
-      this.detailEl.setSelectedOrdinal((event as CustomEvent<number | null>).detail);
+      const ordinal = (event as CustomEvent<number | null>).detail;
+      this.detailEl.setSelectedOrdinal(ordinal);
+      // D4: a selection whose only visible effect is inside a collapsed pane looks
+      // like a broken click, so selecting opens the pane.
+      if (ordinal !== null) {
+        this.workspace.expandPane("detail");
+      }
+    });
+    // The workspace owns the toggles; the shell only mirrors the result into the
+    // hash, the same way it does for the table's column widths.
+    this.workspace.addEventListener(PANES_CHANGE_EVENT, (event) => {
+      this.collapsedPanes = (event as CustomEvent<Set<CollapsiblePane>>).detail;
+      this.scheduleHashWrite();
+    });
+    // Column widths round-trip through the hash like every other view preference
+    // (`url-state` spec, "Column widths round-trip"); the writer's debounce is what
+    // keeps a drag from writing the URL on every pointer move.
+    this.tableEl.addEventListener("columns-change", (event) => {
+      this.columnWidths = (event as CustomEvent<ColumnWidths>).detail;
+      this.scheduleHashWrite();
     });
     this.filterBarEl.addEventListener("filters-change", (event) => {
       const detail = (event as CustomEvent<FiltersChangeDetail>).detail;
@@ -344,6 +379,8 @@ export class LooqApp extends HTMLElement {
       query: this.filterBarEl?.getState().queryText ?? "",
       formatOverride: this.formatOverride,
       tzOffsetMinutes: this.tzOffsetMinutes,
+      columnWidths: this.columnWidths,
+      collapsedPanes: this.collapsedPanes,
     });
   }
 
@@ -383,6 +420,18 @@ export class LooqApp extends HTMLElement {
         `${decoded.malformedFilterCount} malformed filter entr${decoded.malformedFilterCount === 1 ? "y" : "ies"}`,
       );
     }
+    // Applied unconditionally: `decodeHash` guarantees usable widths, so a bad
+    // `cols=` only ever adds a notice — it never keeps the log from loading
+    // (`url-state` spec, "A bad column width never blocks the log"). Set before
+    // anything below can trigger a hash write, or the widths just read from the
+    // link would be written back out as defaults.
+    this.columnWidths = decoded.columnWidths;
+    this.tableEl.setColumnWidths(decoded.columnWidths);
+    notices.push(...decoded.columnWidthErrors);
+    // The panes themselves were applied at connect; only what could not be applied
+    // is left to report (`url-state` spec, "An unknown pane name never blocks the
+    // log").
+    notices.push(...decoded.collapsedPaneErrors);
 
     const known = knownFieldNames(this.fieldInventory);
     const validFilters = new Map<string, Set<string>>();

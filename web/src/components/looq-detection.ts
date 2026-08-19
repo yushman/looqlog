@@ -9,7 +9,19 @@
 // section by itself the first time it happens — collapsing saves space, it never
 // hides the warning.
 
-import type { DetectionResultDto } from "../wasm-types";
+import type { DetectionResultDto, TimestampShapeKey } from "../wasm-types";
+import { dispatchRailAttention } from "./looq-workspace";
+
+/** Human-readable names for the timestamp shapes the plain-text prefix scanner
+ * recognises (crates/looq-core/src/timestamp.rs `TimestampShape::as_str`). */
+const SHAPE_LABELS: Record<TimestampShapeKey, string> = {
+  iso8601: "ISO 8601",
+  "slash-date": "slash-date",
+  klog: "klog",
+  syslog3164: "syslog RFC 3164",
+  clf: "Apache/CLF",
+  epoch: "epoch",
+};
 
 /** Below this fraction a *threshold* win is still flagged as low-confidence — the
  * detector's own 0.8 threshold (crates/looq-core/src/detect.rs) is a "did it win"
@@ -58,7 +70,7 @@ export class LooqDetection extends HTMLElement {
     const key =
       detection === null
         ? `null|${activeFormat ?? ""}`
-        : `${detection.format}|${detection.matchFraction}|${detection.outcome}`;
+        : `${detection.format}|${detection.matchFraction}|${detection.outcome}|${detection.timestampShape ?? ""}`;
     if (key === this.lastKey) {
       return;
     }
@@ -66,6 +78,7 @@ export class LooqDetection extends HTMLElement {
 
     if (detection === null) {
       this.classList.remove("fallback", "low-confidence");
+      dispatchRailAttention(this, { needsAttention: false, autoExpand: false });
       // An explicit override means nothing was ever sampled, so there is no match
       // fraction and never will be — saying "detecting…" forever describes work
       // that is not happening. Without an override, detection genuinely is still
@@ -87,6 +100,13 @@ export class LooqDetection extends HTMLElement {
     }
 
     const pct = (detection.matchFraction * 100).toFixed(0);
+    // Plain text is no longer automatically a fallback: when the prefix scanner
+    // recognised a timestamp shape in enough of the sample, the core reports a
+    // threshold match like any other format, and the "fell back to plain text"
+    // warning must not fire on input that parsed perfectly well (design D9 of the
+    // prefix-and-payload-parsing change). Saying *which* shape matched is what keeps
+    // that from reading as a bare "plain (95%)" the user cannot act on.
+    const shape = detection.timestampShape;
     const isFallback = detection.outcome === "fallback";
     const isLowConfidence = isFallback || detection.matchFraction < LOW_CONFIDENCE_BELOW;
     this.classList.toggle("fallback", isFallback);
@@ -100,10 +120,16 @@ export class LooqDetection extends HTMLElement {
         : `${detection.format} (${pct}%)`;
     this.stateEl.className = `rail-section-state${isLowConfidence ? " warning" : ""}`;
 
-    if (isLowConfidence && !this.autoOpened) {
+    // Same rule as the diagnostics surface (collapsible-workspace-panes design
+    // D3): a fallback or low-confidence detection is stated on the rail's own
+    // toggle, so collapsing the rail cannot bury it, and the condition that opens
+    // this section by itself expands the pane around it too.
+    const autoExpand = isLowConfidence && !this.autoOpened;
+    if (autoExpand) {
       this.detailsEl.open = true;
       this.autoOpened = true;
     }
+    dispatchRailAttention(this, { needsAttention: isLowConfidence, autoExpand });
 
     this.bodyEl.innerHTML = isFallback
       ? `<p class="detection warning">
@@ -113,7 +139,11 @@ export class LooqDetection extends HTMLElement {
          </p>`
       : `<p class="detection${isLowConfidence ? " warning" : ""}">
            Detected format: <strong>${escapeHtml(detection.format)}</strong>
-           (${pct}% of sampled lines matched)
+           (${pct}% of sampled lines matched)${
+             shape === null
+               ? ""
+               : ` — matched by a recognised <strong>${escapeHtml(SHAPE_LABELS[shape] ?? shape)}</strong> timestamp prefix`
+           }
          </p>`;
   }
 }

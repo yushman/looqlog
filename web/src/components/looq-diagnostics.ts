@@ -9,6 +9,7 @@
 // user"; a summary line that always states the count does.
 
 import type { DiagnosticsSummaryDto } from "../wasm-types";
+import { dispatchRailAttention } from "./looq-workspace";
 
 /** Same threshold the expanded panel uses for its warning styling. */
 const SEVERE_SKIP_RATIO = 0.2;
@@ -27,6 +28,8 @@ export class LooqDiagnostics extends HTMLElement {
    * rewritten when its content actually changed, so the nested "Examples" section
    * keeps its open state (and nothing inside gets detached under a pointer). */
   private lastBodyKey: string | null = null;
+  /** What the workspace was last told about this surface (design D3). */
+  private lastAttention: boolean | null = null;
 
   connectedCallback(): void {
     if (this.detailsEl) {
@@ -85,6 +88,10 @@ export class LooqDiagnostics extends HTMLElement {
       this.headlineEl.className = "diagnostics ok";
       this.classList.remove("warning");
       this.writeBody("clean", cumulativeNote);
+      // Nothing to see, so the pane's own control must stop saying there is
+      // (collapsible-workspace-panes design D3) — live mode can go from skipped
+      // lines back to none as counts are recomputed.
+      this.reportAttention(false);
       return;
     }
 
@@ -99,10 +106,17 @@ export class LooqDiagnostics extends HTMLElement {
     this.headlineEl.textContent =
       `${summary.total} line(s) skipped or flagged, next to ${this.entriesEmitted} entries produced.`;
 
-    if (isSevere && !this.autoOpened) {
+    // Skipped lines are something the user must not miss, so the rail's toggle
+    // says so too — otherwise collapsing the rail would hide the very summary
+    // that makes this section allowed to be collapsible (design D3). A severe
+    // ratio opens the section AND, through `autoExpand`, the pane containing it:
+    // an auto-opened section inside a zero-width pane is visible to nobody.
+    const autoExpand = isSevere && !this.autoOpened;
+    if (autoExpand) {
       this.detailsEl.open = true;
       this.autoOpened = true;
     }
+    this.reportAttention(true, autoExpand);
 
     const countRows = Object.entries(summary.counts)
       .map(([reason, count]) => `<li><code>${escapeHtml(reason)}</code>: ${count}</li>`)
@@ -129,6 +143,16 @@ export class LooqDiagnostics extends HTMLElement {
        </details>
        ${cumulativeNote}`,
     );
+  }
+
+  /** Live mode re-renders on every tick; only a *change* is worth telling the
+   * workspace about (an `autoExpand` always is — it is an action, not a state). */
+  private reportAttention(needsAttention: boolean, autoExpand = false): void {
+    if (needsAttention === this.lastAttention && !autoExpand) {
+      return;
+    }
+    this.lastAttention = needsAttention;
+    dispatchRailAttention(this, { needsAttention, autoExpand });
   }
 
   private writeBody(key: string, html: string): void {
