@@ -72,8 +72,16 @@ jobs:
 
   # packaging spec, "Vendored artifacts are verifiably current": rebuild
   # assets/ from source and fail if the committed copy has drifted (ADR-0008 D2).
+  # Runs on macOS, unlike every other job here, and deliberately so: this job diffs
+  # a fresh build against the committed artifacts byte-for-byte, and rustc does not
+  # produce byte-identical wasm across host operating systems. With rustc, binaryen
+  # and Cargo.lock all identical, an arm64-macOS build and an x86_64-Linux build of
+  # the same source still differed by 12 bytes — so a Linux runner would report
+  # "stale" forever while nothing was stale. The artifacts are built and committed
+  # from arm64 macOS; the checker has to match that. If that ever stops being true,
+  # this job's platform moves with it.
   frontend-artifact-staleness:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -84,14 +92,45 @@ jobs:
           node-version: 24
       - name: Install wasm-pack
         run: npm install -g wasm-pack
+      # Pinned: wasm-opt is part of the artifact, so an unpinned binaryen makes the
+      # rebuilt core.wasm differ from the committed one with no source change.
+      # Without this, wasm-pack downloads its own copy — which also failed
+      # intermittently, taking the whole job down with it.
+      - name: Install binaryen (wasm-opt)
+        run: |
+          V=version_132
+          curl -sSL "https://github.com/WebAssembly/binaryen/releases/download/${V}/binaryen-${V}-arm64-macos.tar.gz" \
+            | tar xz
+          echo "$PWD/binaryen-${V}/bin" >> "$GITHUB_PATH"
       - name: Rebuild frontend artifacts
-        run: ./scripts/build-frontend.sh
+        run: |
+          set +e
+          out=$(./scripts/build-frontend.sh 2>&1)
+          code=$?
+          echo "$out"
+          if [ $code -ne 0 ]; then
+            # Job logs need admin rights over the API; annotations are readable on
+            # a public repo, so a failure here stays diagnosable from outside.
+            echo "$out" | tail -25 | while IFS= read -r l; do echo "::error::$l"; done
+          fi
+          exit $code
       - name: Fail if crates/looq/assets/ drifted from source
         run: |
           if ! git diff --quiet -- crates/looq/assets/; then
             echo "::error::crates/looq/assets/ is stale — committed frontend artifacts do not match a fresh build."
             echo "Run ./scripts/build-frontend.sh and commit the result."
             git diff --stat -- crates/looq/assets/
+            git diff --stat -- crates/looq/assets/ | while IFS= read -r l; do echo "::error::drift: $l"; done
+            for f in $(git diff --name-only -- crates/looq/assets/); do
+              echo "::error::size now $(wc -c < "$f") vs committed $(git show HEAD:"$f" | wc -c) — $f"
+              git show HEAD:"$f" > /tmp/committed.bin
+              n=$(cmp -l /tmp/committed.bin "$f" 2>/dev/null | wc -l | tr -d ' ')
+              echo "::error::differing bytes: $n — $f"
+              cmp -l /tmp/committed.bin "$f" 2>/dev/null | head -8 \
+                | while IFS= read -r l; do echo "::error::  byte $l"; done
+              diff <(strings -a /tmp/committed.bin | sort -u) <(strings -a "$f" | sort -u) \
+                | head -10 | while IFS= read -r l; do echo "::error::  strings: $l"; done
+            done
             exit 1
           fi
 

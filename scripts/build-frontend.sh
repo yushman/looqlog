@@ -27,6 +27,30 @@ WASM_TMP="$ROOT/target/frontend-build-tmp"
 ASSETS_DIR="$ROOT/crates/looq/assets"
 WEB_DIR="$ROOT/web"
 
+# rustc embeds absolute source paths in panic messages, so a wasm built here and a
+# wasm built on a CI runner differed by the length of `/Users/<name>` vs
+# `/home/runner` — 4 bytes at last measurement, enough to fail the staleness diff
+# forever while nothing was actually stale. Remapping makes the output identical
+# across machines, and stops the builder's username from shipping inside the
+# released binaries (the artifacts are embedded via include_bytes!).
+export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=${ROOT}=/looq ${RUSTFLAGS:-}"
+
+# The wasm-opt build is part of the artifact, so a different binaryen produces a
+# different core.wasm and the staleness check fails with no source change. CI pins
+# this version; warn loudly here rather than let the mismatch surface as a
+# confusing red CI run on someone else's push.
+EXPECTED_BINARYEN=132
+if command -v wasm-opt >/dev/null 2>&1; then
+  have=$(wasm-opt --version | awk '{print $3}')
+  if [ "$have" != "$EXPECTED_BINARYEN" ]; then
+    echo "warning: wasm-opt version $have, expected $EXPECTED_BINARYEN — the rebuilt" >&2
+    echo "         core.wasm will differ from CI's and fail the staleness check." >&2
+  fi
+else
+  echo "warning: no wasm-opt on PATH; wasm-pack will download its own, which may" >&2
+  echo "         not be version $EXPECTED_BINARYEN — see above." >&2
+fi
+
 rm -rf "$WASM_TMP"
 wasm-pack build "$ROOT/crates/looq-wasm" \
   --target web \

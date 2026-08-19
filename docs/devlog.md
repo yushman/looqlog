@@ -2520,6 +2520,73 @@ API and `gh` is not installed here, so the cause is not yet known — local `was
 `node v24.14.1` match what CI installs, and `web/package-lock.json` is committed, so the obvious
 two candidates are already ruled out. Next session's first job.
 
+## 2026-08-19 (third entry) — the staleness job had never once worked, and why
+
+`frontend-artifact-staleness` had failed on every CI run this repository has ever had. Four
+separate causes stacked on top of each other, and each one hid the next — the first two had to
+be fixed before the third was even visible, and the third before the fourth.
+
+**1. `wasm-pack` downloading its own `wasm-opt`, intermittently.** The first probe run failed
+at `wasm-pack build`; the second, with no relevant change, passed it. Locally the step never
+failed because `wasm-opt` was already on PATH from Homebrew, so wasm-pack never downloaded
+anything — the log line is `found wasm-opt at "/opt/homebrew/bin/wasm-opt"`. Fixed by pinning
+binaryen `version_132` in the job. Also worth noting: a flaky network step was taking down a
+correctness check, which reads as "the check is broken" rather than "the download failed".
+
+**2. Absolute build paths compiled into `core.wasm`.** rustc embeds source paths in panic
+messages. The committed wasm carried 11 of them, all beginning `/Users/ivyush/.cargo/...`; a
+runner produces `/home/runner/.cargo/...`. Different lengths, so the diff could never pass —
+4 bytes apart at that point. `scripts/build-frontend.sh` now sets `--remap-path-prefix` for
+both `CARGO_HOME` and the repo root, and paths inside the artifact read `/cargo/registry/...`
+and `/looq/...` regardless of who built it. **This was also leaking the builder's username into
+every published binary**, since the artifacts are embedded via `include_bytes!` — the v0.1.0
+assets on the Releases page contain it. Not a secret, but not something a privacy-first tool
+should ship, and worth a rebuild-and-repoint if 0.1.1 happens for any other reason.
+
+**3. Host-dependent output, which moved the job to macOS.** After the remap the drift did not
+disappear, it changed: 210,227 bytes locally against 210,239 on the Linux runner. Both machines:
+`rustc 1.97.1 (8bab26f4f 2026-07-14)` — same commit hash — `wasm-opt version 132`, same
+`Cargo.lock`, and every path inside the artifact normalized (verified by dumping them from the
+runner's own build via annotations). Two consecutive local rebuilds are byte-identical
+(`deec11718c95287198022c56339e0947` twice), so nothing is non-deterministic *on a machine*.
+
+That made the job stricter than the spec it implements: `packaging`'s scenario says "the rebuild
+command is run **twice** with no source change → byte-identical", which holds. The job was
+comparing an arm64-macOS build against an x86_64-Linux one. **Moved to `macos-latest`**, the
+platform the artifacts are actually built and committed from, keeping the byte-for-byte
+comparison rather than weakening it to a source-hash check. On macOS the sizes matched exactly —
+which turned the remaining difference into something small enough to identify.
+
+**4. One byte, and it was never about the code.** On the macOS runner the artifacts were the
+same length and still differed. A `cmp -l` probe reported **exactly one differing byte** at
+offset 210206: `'4'` against `'5'`. The strings around it: `0.26.4wasm-bindgen` committed,
+`0.26.5wasm-bindgen` fresh. That is the wasm `producers` section, which records the tools that
+built the module — including `walrus`, a transitive dependency of the wasm-bindgen CLI. `cargo
+install` resolves that CLI's own dependencies fresh, so a locally cached CLI built against
+walrus 0.26.4 and a runner-built one on 0.26.5 embed different version strings into every
+artifact. Nothing about the compiled code differed at all.
+
+Fixed by adding `--strip-producers` to the wasm-opt flags in `crates/looq-wasm/Cargo.toml`. The
+section is informational; dropping it makes the artifact a function of the source instead of a
+function of which tool versions happened to resolve that day, and takes 62 bytes off it
+(210,227 → 210,165). Every remaining knob — rustc, binaryen, wasm-bindgen — is either pinned or
+verified identical, so this was the last unpinned input, and it was one that could never have
+been pinned from this repository.
+
+Two dead ends worth recording so they are not re-walked: Homebrew's binaryen 132 and the
+official binaryen 132 release produce **byte-identical** output on the same input (651,449
+bytes, `cmp -l` reports 0 differences), so the two builds of the same version are
+interchangeable; and there is no `~/.cargo/config.toml` or ambient `RUSTFLAGS` on the dev
+machine, so neither was contributing.
+
+`build-frontend.sh` now also warns loudly when the local binaryen is not 132, since that would
+reintroduce drift with no source change.
+
+**Method worth remembering:** job logs need admin rights over the REST API and `gh` was not
+installed, so none of this was diagnosed by reading a log. Splitting the step into named probes
+made the failing stage visible through the jobs API (step names and conclusions are public), and
+`::error::` annotations — readable on a public repo without auth — carried the actual text out.
+
 ## Ideas for later
 
 - Resizable rail/detail panes, deliberately deferred by `frontend-three-pane-layout`'s Non-Goals
