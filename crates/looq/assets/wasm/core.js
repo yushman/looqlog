@@ -154,15 +154,23 @@ export class ParserHandle {
      * auto-detect. `tz_offset_minutes`: a fixed UTC offset (minutes east) applied to
      * timestamps with no explicit offset; `undefined` defaults to UTC (named IANA
      * zones are out of scope — see `crates/looq-core/src/timestamp.rs`).
+     * `reference_ms`: the caller's "now" as epoch milliseconds (`Date.now()` in
+     * `web/src/worker.ts`), used to infer a year for the shapes that carry none —
+     * syslog RFC 3164, klog (`prefix-and-payload-parsing` design.md D4). It crosses
+     * the boundary rather than being read inside `looq-core` because ADR-0005
+     * requires that crate to stay target-agnostic and clock-free. Without it those
+     * shapes are not recognised at all, so a syslog or klog file gets an empty
+     * timeline.
      * @param {string | null} [format_override]
      * @param {number | null} [tz_offset_minutes]
+     * @param {number | null} [reference_ms]
      */
-    constructor(format_override, tz_offset_minutes) {
+    constructor(format_override, tz_offset_minutes, reference_ms) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             var ptr0 = isLikeNone(format_override) ? 0 : passStringToWasm0(format_override, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             var len0 = WASM_VECTOR_LEN;
-            wasm.parserhandle_new(retptr, ptr0, len0, isLikeNone(tz_offset_minutes) ? Number.MAX_SAFE_INTEGER : (tz_offset_minutes) >> 0);
+            wasm.parserhandle_new(retptr, ptr0, len0, isLikeNone(tz_offset_minutes) ? Number.MAX_SAFE_INTEGER : (tz_offset_minutes) >> 0, !isLikeNone(reference_ms), isLikeNone(reference_ms) ? 0 : reference_ms);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
