@@ -88,7 +88,12 @@
 
 ## 6. Handoff (not for the implementing agent)
 
-- [ ] 6.1 Push the `v0.1.0` tag. This is the maintainer's action: it is public, hard to
+- [x] 6.1 Push the `v0.1.0` tag. This is the maintainer's action: it is public, hard to
   reverse, and per this project's rules nothing is pushed without an explicit request.
+  Done on the maintainer's explicit instruction; all six jobs passed and the release published.
 - [ ] 6.2 After the workflow runs, download the Linux binary on a real machine and run it once,
   closing the "clean machine" requirement with a human rather than only a runner.
+  **Partially done:** the published Linux asset was downloaded and confirmed `static-pie linked`
+  (`file`), but not executed — there is still no Linux machine here. The published
+  `aarch64-apple-darwin` asset was downloaded and run (`looq 0.1.0`). Running the Linux binary
+  on a real Linux box remains genuinely owed; the runner's smoke test is not a substitute for it.

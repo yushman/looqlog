@@ -2477,6 +2477,49 @@ label GitHub still offers, which also keeps the READMEs' claim that every asset 
 as design D7 specifically so the two macOS targets sharing no runner label doesn't get tidied
 back into one.
 
+## 2026-08-19 (later the same day) — `v0.1.0` is tagged, built and published
+
+The numbers the entry above recorded as owed. `v0.1.0` pushed, workflow run
+[32268666584](https://github.com/yushman/openlogviewer/actions/runs/32268666584): all six jobs
+green on the first attempt — `check-version`, four `build` jobs, `publish`.
+
+**The Linux x86_64 number this project has never had, plus the other three** (from the release
+body, which the workflow assembled from each job's own `wc -c`):
+
+| Target | Bytes | | TDR §5 budget |
+|---|---|---|---|
+| `x86_64-unknown-linux-musl` | 2,779,744 | ~2.65 MiB | ~10 MB — **73% headroom** |
+| `x86_64-pc-windows-msvc` | 2,780,160 | ~2.65 MiB | (budget names Linux only) |
+| `aarch64-apple-darwin` | 2,392,592 | ~2.28 MiB | |
+| `x86_64-apple-darwin` | 2,394,464 | ~2.28 MiB | |
+
+The Linux binary is ~387 KB larger than the macOS ones, consistently across both architectures
+— musl's static linking pulling in what the dynamic macOS builds get from the system. Well
+inside budget either way; noted so a future "why is Linux bigger" has an answer.
+
+**Verified against the published artifacts, not against the build logs:**
+- `file looq-0.1.0-x86_64-unknown-linux-musl` → `ELF 64-bit LSB pie executable, x86-64,
+  static-pie linked, stripped`. D2's whole point — no glibc floor — confirmed on the actual
+  downloadable file, not inferred from the target triple.
+- Downloaded `looq-0.1.0-aarch64-apple-darwin`, `chmod +x`, ran it: `looq 0.1.0`.
+- Its sha256 differs from the local `target/release/looq`, as expected — reproducible builds are
+  an explicit Non-Goal, and the two came from different machines and paths.
+
+**Still owed, and not quietly closed:** nobody has *run* the Linux binary on a Linux machine.
+The runner smoke-tested it, and the downloaded file is confirmed static, but "a human ran it on
+a real box" is a different claim and this entry does not make it (task 6.2).
+
+**Unrelated failure found while watching the release go out, deliberately not fixed inside this
+change:** CI's `frontend-artifact-staleness` job has failed on both of the only two CI runs this
+repository has ever had (`506a3fb` and `5271875`), on the `Rebuild frontend artifacts` step —
+`./scripts/build-frontend.sh` — before reaching the drift comparison. So the guard against stale
+vendored artifacts (ADR-0008 D2) has never actually worked, which is a silent-failure class this
+project's own testing rules call out. It does not touch the release: `release.yml` never rebuilds
+the frontend, it ships the committed `crates/looq/assets/`. Job logs need admin rights over the
+API and `gh` is not installed here, so the cause is not yet known — local `wasm-pack 0.15.0` /
+`node v24.14.1` match what CI installs, and `web/package-lock.json` is committed, so the obvious
+two candidates are already ruled out. Next session's first job.
+
 ## Ideas for later
 
 - Resizable rail/detail panes, deliberately deferred by `frontend-three-pane-layout`'s Non-Goals
