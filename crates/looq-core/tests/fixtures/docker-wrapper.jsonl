@@ -1,0 +1,3 @@
+{"log":"2026-08-08T17:42:01Z ERROR boom\n","stream":"stdout","time":"2026-08-08T17:42:02Z"}
+{"log":"no timestamp in here at all\n","stream":"stderr","time":"2026-08-08T17:42:03Z"}
+{"log":"hi","level":"info","service":"api"}

@@ -7,7 +7,7 @@ use crate::entry::Entry;
 use crate::fields::FieldInventory;
 use crate::format::Format;
 use crate::parsers::{json, logfmt, plain, Extracted};
-use crate::timestamp::TimeZonePolicy;
+use crate::timestamp::{ParseContext, TimeZonePolicy};
 
 /// Default cap on individually-retained diagnostics. Measured at ~126 bytes/item
 /// uncapped (`examples/mem_probe.rs`, task 6.1 — see `docs/devlog.md` for the exact
@@ -45,7 +45,7 @@ enum State {
 /// Construct a fresh instance per input — reusing one across two different files/
 /// streams mixes their format detection and field inventories.
 pub struct Parser {
-    tz: TimeZonePolicy,
+    ctx: ParseContext,
     state: State,
     diagnostics: Diagnostics,
     inventory: FieldInventory,
@@ -59,7 +59,17 @@ impl Parser {
     /// `format_override`: when `Some`, detection is skipped entirely and every line
     /// is parsed under that format from the start (format-detection spec, "Explicit
     /// override wins over detection").
+    ///
+    /// Year-less timestamp shapes (syslog RFC 3164, klog) need a reference instant to
+    /// be dated at all — supply one with [`Parser::with_context`], because ADR-0005
+    /// forbids this crate from reading the system clock itself.
     pub fn new(format_override: Option<Format>, tz: TimeZonePolicy) -> Self {
+        Self::with_context(format_override, ParseContext::new(tz))
+    }
+
+    /// As [`Parser::new`], with the full parse context — the timezone policy plus the
+    /// caller-supplied reference instant for year inference (design.md D4).
+    pub fn with_context(format_override: Option<Format>, ctx: ParseContext) -> Self {
         let state = match format_override {
             Some(format) => State::Active {
                 format,
@@ -71,7 +81,7 @@ impl Parser {
             },
         };
         Self {
-            tz,
+            ctx,
             state,
             diagnostics: Diagnostics::new(DEFAULT_DIAGNOSTIC_CAP),
             inventory: FieldInventory::new(DEFAULT_FIELD_VALUE_CAP),
@@ -173,8 +183,16 @@ impl Parser {
         };
 
         let sample_refs: Vec<&str> = sample.iter().map(|(_, s)| s.as_str()).collect();
-        let result = detect::detect(&sample_refs);
+        let result = detect::detect(&sample_refs, &self.ctx);
         let format = result.format;
+
+        // Sticky prefix choice (design.md D3): the sample that picked the format also
+        // picks the timestamp shape, so the common case costs one match attempt per
+        // line instead of sweeping every shape. Purely an ordering hint — every line
+        // still falls back to the full sweep when the hint misses.
+        if let (Some(shape), Some(offset)) = (result.timestamp_shape, result.timestamp_offset) {
+            self.ctx.set_prefix_hint(shape, offset);
+        }
 
         for (line_no, text) in &buffered_all {
             self.process_and_emit(format, *line_no, text, out);
@@ -194,7 +212,7 @@ impl Parser {
         out: &mut Vec<Entry>,
     ) {
         match format {
-            Format::Json => match json::parse_line(text, &self.tz) {
+            Format::Json => match json::parse_line(text, &self.ctx) {
                 Ok(extracted) => self.finish_entry(line_no, extracted, out),
                 Err(reason) => {
                     let (diag_reason, detail) = match reason {
@@ -210,11 +228,11 @@ impl Parser {
                 }
             },
             Format::Logfmt => {
-                let extracted = logfmt::parse_line(text, &self.tz);
+                let extracted = logfmt::parse_line(text, &self.ctx);
                 self.finish_entry(line_no, extracted, out);
             }
             Format::Plain => {
-                let extracted = plain::parse_line(text, &self.tz);
+                let extracted = plain::parse_line(text, &self.ctx);
                 self.finish_entry(line_no, extracted, out);
             }
         }
@@ -233,6 +251,7 @@ impl Parser {
             ordinal: line_no,
             timestamp: extracted.timestamp,
             timestamp_used_default_tz: extracted.timestamp_used_default_tz,
+            timestamp_year_inferred: extracted.timestamp_year_inferred,
             level: extracted.level,
             message: extracted.message.unwrap_or_default(),
             fields: extracted.fields,

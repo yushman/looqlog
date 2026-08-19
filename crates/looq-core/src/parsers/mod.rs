@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 
 use crate::entry::FieldValue;
 use crate::level::{self, Level};
-use crate::timestamp::{self, TimeZonePolicy, TIMESTAMP_FIELDS};
+use crate::timestamp::{self, ParseContext, TIMESTAMP_FIELDS};
 
 /// Field names checked for the level, in precedence order (field-extraction spec).
 const LEVEL_FIELDS: &[&str] = &["level", "lvl", "severity"];
@@ -30,6 +30,10 @@ const MESSAGE_FIELDS: &[&str] = &["message", "msg"];
 pub struct Extracted {
     pub timestamp: Option<DateTime<Utc>>,
     pub timestamp_used_default_tz: bool,
+    /// Set when the timestamp's shape carried no year and one was inferred
+    /// (design.md D4). Only the plain-text prefix scanner can set it: the named
+    /// fields structured formats carry always include a year.
+    pub timestamp_year_inferred: bool,
     /// Set when a recognised timestamp field was present but unparsable — the field
     /// stays in `fields` (not consumed) and this detail is turned into a diagnostic
     /// by the caller.
@@ -42,14 +46,14 @@ pub struct Extracted {
 /// Pull the recognised timestamp/level/message keys out of `raw` by precedence,
 /// leaving everything else as arbitrary fields. Shared by the JSON and logfmt
 /// parsers, which differ only in how they produce the initial `raw` map.
-pub fn extract(mut raw: BTreeMap<String, FieldValue>, tz: &TimeZonePolicy) -> Extracted {
+pub fn extract(mut raw: BTreeMap<String, FieldValue>, ctx: &ParseContext) -> Extracted {
     let mut timestamp = None;
     let mut timestamp_used_default_tz = false;
     let mut timestamp_diagnostic = None;
     for name in TIMESTAMP_FIELDS {
         if let Some(value) = raw.get(*name) {
             let text = value.display();
-            match timestamp::parse_value(&text, tz) {
+            match timestamp::parse_value(&text, ctx.tz()) {
                 Some(parsed) => {
                     timestamp = Some(parsed.instant);
                     timestamp_used_default_tz = parsed.used_default_tz;
@@ -87,6 +91,7 @@ pub fn extract(mut raw: BTreeMap<String, FieldValue>, tz: &TimeZonePolicy) -> Ex
     Extracted {
         timestamp,
         timestamp_used_default_tz,
+        timestamp_year_inferred: false,
         timestamp_diagnostic,
         level: level_value,
         message,

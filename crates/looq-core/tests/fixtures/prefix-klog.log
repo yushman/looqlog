@@ -1,0 +1,5 @@
+I0808 17:42:01.123456       1 main.go:10] starting controller manager
+W0808 17:42:02.234567       1 reflector.go:324] watch of *v1.Pod ended with: too old resource version
+E0808 17:42:03.345678       1 leaderelection.go:65] error retrieving resource lock
+D0808 17:42:04.456789       1 cache.go:88] cache lookup for session:42
+F0808 17:42:05.567890       1 main.go:99] unable to start manager

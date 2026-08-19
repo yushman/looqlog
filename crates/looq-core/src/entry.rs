@@ -47,6 +47,12 @@ pub struct Entry {
     /// True when `timestamp` is present but came from a naive value that had no
     /// explicit offset, so the caller's timezone policy (default UTC) was applied.
     pub timestamp_used_default_tz: bool,
+    /// True when `timestamp` is present but its shape carried no year (syslog RFC
+    /// 3164, klog), so one was inferred from the caller's reference instant
+    /// (`prefix-and-payload-parsing` design.md D4). Carried alongside
+    /// `timestamp_used_default_tz` for the same reason: an entry dated by assumption
+    /// must be distinguishable from one dated by the log.
+    pub timestamp_year_inferred: bool,
     pub level: Option<Level>,
     pub message: String,
     /// Arbitrary fields other than the recognised timestamp/level/message keys.

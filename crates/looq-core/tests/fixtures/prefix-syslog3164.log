@@ -1,0 +1,5 @@
+Aug  8 17:42:01 host sshd[1234]: Accepted publickey for deploy from 10.0.0.7
+Aug  8 17:42:02 host cron[91]: (root) CMD (/usr/bin/rotate-logs)
+Aug  8 17:42:03 host kernel: [12345.678] eth0: link up
+Aug 18 09:05:44 host app[123]: connection refused talking to cache
+Dec 31 23:59:59 host app[123]: rolling over into the new year

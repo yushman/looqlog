@@ -30,7 +30,7 @@ pub use fields::{FieldInventory, FieldStats};
 pub use format::Format;
 pub use level::Level;
 pub use parser::Parser;
-pub use timestamp::TimeZonePolicy;
+pub use timestamp::{ParseContext, TimeZonePolicy, TimestampShape};
 
 /// Result of parsing a JSON-Lines input: how many lines parsed as valid JSON, and a
 /// warning for every line that did not. Malformed lines are never silently dropped —

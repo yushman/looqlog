@@ -1,0 +1,7 @@
+04-18 19:21:16.151  1000   806   995 D ActivityManager: freezing 2521 com.x
+04-21 12:57:16.290  root   511   614 D vhdnativeservice: cmd: dumpsys cpuinfo
+04-21 13:07:51.985   806 29149 W UsbDescriptorParser: Unrecognized len: 58
+04-21 13:07:39.761 u0_a2  1906  1915 I d.process.medi: Thread[6,tid=1915,state=RUNNABLE]
+04-21 13:07:53.198  1000   806   806 S SilentTag: nothing to report here
+04-21 13:07:55.010  1000  1024  1024 I OkHttp: level=warn service=api msg="slow response"
+04-21 13:07:51.985   806 29149 W

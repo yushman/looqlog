@@ -1,0 +1,4 @@
+1786000000 INFO server started listening on port 8080
+1786000001 config loaded from /etc/app.conf
+1786000002 ERROR connection refused talking to cache
+1786000003 WARN timeout waiting for upstream db
