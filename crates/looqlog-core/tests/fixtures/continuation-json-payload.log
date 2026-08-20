@@ -1,15 +1,15 @@
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl: response body = {
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:   "config" : {
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:     "common" : {
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:       "applicationConfigs" : {
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:         "ru.sberdevices.updater_b2b" : {
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:           "updates" : [ {
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:             "crc32" : 3238494730,
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:             "packageId" : "ru.sberdevices.calendarb2b"
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:           } ]
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:         }
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:       }
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:     }
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl:   }
-04-21 12:58:17.816 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl: }
-04-21 12:58:17.900 10012  3198 10955 D BTB_UPDATER/ConfigRepositoryImpl: config applied
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl: response body = {
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:   "config" : {
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:     "common" : {
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:       "applicationConfigs" : {
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:         "com.example.updater" : {
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:           "updates" : [ {
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:             "crc32" : 3238494730,
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:             "packageId" : "com.example.calendar"
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:           } ]
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:         }
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:       }
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:     }
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl:   }
+04-21 12:58:17.816 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl: }
+04-21 12:58:17.900 10012  3198 10955 D APP_UPDATER/ConfigRepositoryImpl: config applied

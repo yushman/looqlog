@@ -23,9 +23,9 @@ not anticipate. There are two distinct phenomena, plus one trap:
 trace arrives with a full prefix on each frame:
 
 ```
-04-21 12:56:57.372 10044 2075 6108 E JAZZ/WebSocketClientImpl: Error websocket
-04-21 12:56:57.372 10044 2075 6108 E JAZZ/WebSocketClientImpl: java.net.SocketTimeoutException: …
-04-21 12:56:57.372 10044 2075 6108 E JAZZ/WebSocketClientImpl: 	at libcore.io.IoBridge.connectErrno(…)
+04-21 12:56:57.372 10044 2075 6108 E App/WebSocketClientImpl: Error websocket
+04-21 12:56:57.372 10044 2075 6108 E App/WebSocketClientImpl: java.net.SocketTimeoutException: …
+04-21 12:56:57.372 10044 2075 6108 E App/WebSocketClientImpl: 	at libcore.io.IoBridge.connectErrno(…)
 ```
 
 These entries already carry a timestamp, a level, a tag and columns — the parser reads
@@ -204,7 +204,7 @@ counting { }      → 237 lines end with positive depth
 ```
 
 Of the 237, 198 are prefix-less dump text that the root-prefix guard rejects, leaving 39
-real payloads — the `BTB_UPDATER/ConfigRepositoryImpl: response body = {` family. A
+real payloads — the `APP_UPDATER/ConfigRepositoryImpl: response body = {` family. A
 JSON array payload split across lines is therefore not recognised; that is an accepted gap,
 and a cheaper one than 320 false chains.
 

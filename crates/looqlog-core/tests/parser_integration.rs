@@ -893,7 +893,7 @@ fn logcat_frames_chain_on_identity_even_when_the_millisecond_drifts() {
     let (entries, parser) = parse_plain(&fixture("continuation-logcat.log"));
     assert_eq!(entries.len(), 9);
     assert_eq!(parser.diagnostics().total(), 0);
-    // Two independent chains: the `JAZZ/WebSocketClientImpl` trace, then the
+    // Two independent chains: the `App/WebSocketClientImpl` trace, then the
     // `System.err` one, which starts a fresh root because its identity differs.
     assert_eq!(
         links(&entries),

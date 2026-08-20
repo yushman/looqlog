@@ -75,7 +75,7 @@ whitespace, a frame marker, or an unclosed brace left open by the root. The time
 NOT participate in the identity comparison.
 
 #### Scenario: Trace frames share the root's identity
-- **WHEN** a logcat `E JAZZ/WebSocketClientImpl` line reporting an exception is followed by
+- **WHEN** a logcat `E App/WebSocketClientImpl` line reporting an exception is followed by
   frames carrying the same pid, tid, level and tag with tab-indented `at …` messages
 - **THEN** each frame is linked to the exception line's ordinal
 

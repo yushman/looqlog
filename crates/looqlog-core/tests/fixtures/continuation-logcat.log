@@ -1,8 +1,8 @@
-04-21 12:56:57.372 10044  2075  6108 E JAZZ/WebSocketClientImpl: Error websocket
-04-21 12:56:57.372 10044  2075  6108 E JAZZ/WebSocketClientImpl: java.net.SocketTimeoutException: failed to connect to ws.salutejazz.ru/178.248.233.18 (port 443) from /10.202.0.132 (port 35112) after 3000ms
-04-21 12:56:57.372 10044  2075  6108 E JAZZ/WebSocketClientImpl: 	at libcore.io.IoBridge.connectErrno(IoBridge.java:236)
-04-21 12:56:57.372 10044  2075  6108 E JAZZ/WebSocketClientImpl: 	at libcore.io.IoBridge.connect(IoBridge.java:180)
-04-21 12:56:57.372 10044  2075  6108 E JAZZ/WebSocketClientImpl: 	at java.net.PlainSocketImpl.socketConnect(PlainSocketImpl.java:142)
+04-21 12:56:57.372 10044  2075  6108 E App/WebSocketClientImpl: Error websocket
+04-21 12:56:57.372 10044  2075  6108 E App/WebSocketClientImpl: java.net.SocketTimeoutException: failed to connect to ws.example.com/203.0.113.10 (port 443) from /10.202.0.132 (port 35112) after 3000ms
+04-21 12:56:57.372 10044  2075  6108 E App/WebSocketClientImpl: 	at libcore.io.IoBridge.connectErrno(IoBridge.java:236)
+04-21 12:56:57.372 10044  2075  6108 E App/WebSocketClientImpl: 	at libcore.io.IoBridge.connect(IoBridge.java:180)
+04-21 12:56:57.372 10044  2075  6108 E App/WebSocketClientImpl: 	at java.net.PlainSocketImpl.socketConnect(PlainSocketImpl.java:142)
 04-21 13:07:51.983  1000   806 29149 W System.err: java.lang.IndexOutOfBoundsException
 04-21 13:07:51.984  1000   806 29149 W System.err: 	at com.android.server.usb.descriptors.ByteStream.advance(ByteStream.java:196)
 04-21 13:07:51.984  1000   806 29149 W System.err: 	at com.android.server.usb.descriptors.UsbDescriptor.postParse(UsbDescriptor.java:182)

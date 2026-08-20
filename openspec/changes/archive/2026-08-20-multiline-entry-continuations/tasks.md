@@ -22,9 +22,9 @@
 - [x] 3.1 Extend `crates/looq-core/tests/fixtures/stack-trace.log` coverage: `stack_trace_becomes_one_entry_per_line_no_diagnostics` must still see 5 entries and 0 diagnostics, now asserting lines 2–5 link to ordinal 1
 - [x] 3.2 New fixture `continuation-python.log` — timestamped line, `Traceback (most recent call last):`, `  File "app.py", line 12, in handler`, frame body, `ValueError: …`
 - [x] 3.3 New fixture `continuation-nested-cause.log` — root, frames, `Caused by:`, more frames, `... 14 more`; assert every member links to the **root**, not to the `Caused by:` line
-- [x] 3.4 New fixture `continuation-logcat.log` drawn from the measured bugreport: the `JAZZ/WebSocketClientImpl` `SocketTimeoutException` block, plus the `W System.err` block whose frame drifts from `.983` to `.984` (design D4)
+- [x] 3.4 New fixture `continuation-logcat.log` drawn from the measured bugreport: the `App/WebSocketClientImpl` `SocketTimeoutException` block, plus the `W System.err` block whose frame drifts from `.983` to `.984` (design D4)
 - [x] 3.5 New fixture `continuation-logcat-noise.log` — consecutive `NetworkSensitiveLogger: *` lines sharing `(pid, tid, level, tag)`; assert none are linked (the 946-line false-positive case)
-- [x] 3.6 New fixture `continuation-json-payload.log` — the `BTB_UPDATER/ConfigRepositoryImpl: response body = {` block; assert grouping happens and that no nested key became a field (design D7)
+- [x] 3.6 New fixture `continuation-json-payload.log` — the `APP_UPDATER/ConfigRepositoryImpl: response body = {` block; assert grouping happens and that no nested key became a field (design D7)
 - [x] 3.7 New fixture `continuation-dump-text.log` — a VM-TRACES-shaped run of unprefixed `at …`, `| held mutexes=` and `native: #NN pc …` lines with no timestamped line above; assert **zero** links
 - [x] 3.8 Test: a blank line closes an open chain
 - [x] 3.9 Test: a chain exceeding the cap is closed, the overflow entry is unlinked, and exactly one `ChainTruncated` diagnostic is recorded; a chain at exactly the cap records none
@@ -61,7 +61,7 @@
 
 - [x] 7.1 Run `./scripts/build-frontend.sh` and commit the rebuilt `crates/looq/assets/` — the macOS CI job fails on vendored-artifact drift otherwise
 - [x] 7.2 Record the new `core.wasm` size against the 210,165-byte baseline and the ~300,000-byte TDR §5 budget in `docs/devlog.md`; if the budget is at risk, stop and report rather than trimming behavior silently
-- [x] 7.3 Load `.playwright-mcp/bugreport.txt` in a running binary and confirm the `JAZZ/WebSocketClientImpl` trace collapses to one row, the timeline peak at `12:56:57` drops from ~60 to 1, and the VM TRACES section is unchanged from today
+- [x] 7.3 Load `.playwright-mcp/bugreport.txt` in a running binary and confirm the `App/WebSocketClientImpl` trace collapses to one row, the timeline peak at `12:56:57` drops from ~60 to 1, and the VM TRACES section is unchanged from today
 - [x] 7.4 Verify live mode: pipe a log containing a stack trace into stdin and confirm each line appears as it arrives, with no entry delayed waiting for the next line
 - [x] 7.5 Update `README.md` and `README.ru.md` in the same commit — multi-line events are now collapsible, and the timeline counts events rather than lines
 - [x] 7.6 Mark PRD §14 Open Question #3 resolved, in the style used for #2

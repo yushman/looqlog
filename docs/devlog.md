@@ -2613,8 +2613,8 @@ VM TRACES section with no special-casing at all: those 3,344 bare `at …` lines
 above them. Confirmed in the browser: 0 links across lines 58,400–58,600.
 
 Whole-file result, same binary, same file: **173 chains covering 1,650 continuation lines out
-of 164,275 entries** — 1%. Largest chain 82 lines (the `BTB_UPDATER/ConfigRepositoryImpl`
-JSON payload at line 19,052). The `JAZZ/WebSocketClientImpl` `SocketTimeoutException` is 36
+of 164,275 entries** — 1%. Largest chain 82 lines (the `APP_UPDATER/ConfigRepositoryImpl`
+JSON payload at line 19,052). The `App/WebSocketClientImpl` `SocketTimeoutException` is 36
 lines and now renders as one row reading `Error websocket · 36 lines`; it ends exactly where it
 should, at `at java.lang.Thread.run(Thread.java:920)`, because the next line's tid changes from
 6108 to 30451.
@@ -2730,6 +2730,33 @@ scope, left for the maintainer. `openspec/specs/`'s delta application and archiv
 the change are likewise left to `/opsx:archive`, not applied by hand. Nothing here is
 published to crates.io yet; that is the next, truly irreversible step, and now it can
 be taken under a name that returns no competing product.
+
+## 2026-08-20 (fourth entry) — redacting a corpus that was never mine
+
+A pre-publication sweep for personal data came back clean where it mattered: `core.wasm`
+carries no `/Users/` path, no username, no `producers` section — the `--remap-path-prefix`
+fix from `release-hardening` survived the rename rebuild — and neither JS bundle has an
+absolute path or a `sourceMappingURL`. No `.env`, no keys, nothing from `.playwright-mcp/`
+tracked.
+
+What it did turn up was not mine to leak. The continuation fixtures were cut from a real
+Android bugreport, and they carried a third party's identifiers into a repository about to
+go public: a WebSocket endpoint with its IP, two internal B2B package names, and the app's
+own log tags. No personal data — no names, addresses, user IDs or conference IDs — but
+internal product names all the same.
+
+Redacted across the fixtures, their assertions, this devlog and the archived
+`multiline-entry-continuations` artifacts: the host became `ws.example.com/203.0.113.10`
+(TEST-NET-3, the range reserved for documentation), the packages became `com.example.*`,
+and the tags became `App/…` and `APP_UPDATER/…`. The shapes the tests actually exercise are
+untouched — a slash inside a tag, an underscore inside a tag, a millisecond that drifts
+between a root and its frame — so all 208 tests pass unchanged.
+
+Worth being explicit that this is redaction, not the history-rewriting `rename-to-looqlog`'s
+design D3 forbids. That rule protects the record of what the project was called; it does not
+oblige us to keep publishing someone else's endpoint. The measurement really was taken
+against a real 168,260-line corpus, and every number in the entries above still refers to
+it.
 
 ## Ideas for later
 
