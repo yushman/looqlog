@@ -2787,6 +2787,43 @@ The uncomfortable part is worth stating plainly rather than dressing up: the che
 job, and I do not know what it caught. A byte-exact vendored artifact is only as
 trustworthy as our ability to explain a diff in it, and this one went unexplained.
 
+## 2026-08-20 (sixth entry) — published, and ADR-0008 finally paid out
+
+`looqlog-core 0.2.0` then `looqlog 0.2.0` are on crates.io. The order is not a
+preference: `looqlog` declares `looqlog-core = { version = "0.2.0" }`, crates.io drops the
+`path` and resolves from the registry, so the binary crate cannot even be *verified* until
+the core is live. Before the first publish `cargo publish --dry-run -p looqlog` failed with
+`no matching package named looqlog-core found`; after it, the same command downloaded
+`looqlog-core v0.2.0` and built clean.
+
+Verified by installing from the registry into an empty root rather than by trusting the
+upload:
+
+```
+cargo install looqlog --locked   → 23.6s, 4.2M binary
+looqlog --version                → looqlog 0.2.0
+GET /                            → 200, 2,832 bytes
+GET /wasm/core.wasm              → 200, 216,857 bytes, byte-identical to the
+                                   committed artifact
+```
+
+That last line is the point. ADR-0008 vendors the built frontend into the crate directory
+specifically so a published crate carries its own UI, and the `packaging` spec has
+asserted since day one that `cargo install` works "on a machine with only a Rust
+toolchain". Until today there was no published crate to test it against. There is now: no
+Node, no npm, no `wasm-pack`, and the served wasm matches the repository byte for byte.
+
+Also closes the debt standing since 2026-08-19: the published `core.wasm` contains no
+`/Users/…` path, no builder username and no `producers` section. v0.1.0's assets carried
+all three, and the decision then was not to cut a release for metadata alone but to let
+the fix ride along with the first release that had a real reason to exist. It did.
+
+Two things this release got wrong on the way, both recorded above rather than smoothed
+over: the tag was first pushed at a commit whose `core.wasm` was stale, and had to be
+moved — a force operation over an already-published tag, cheap only because the release was
+minutes old and unannounced. And the staleness job caught a real diff that I still cannot
+explain.
+
 ## Ideas for later
 
 - The 216,854-byte `core.wasm` from the rename work is unexplained (entry above). If the
@@ -2814,11 +2851,9 @@ trustworthy as our ability to explain a diff in it, and this one went unexplaine
 - Sectioning a bugreport into its `------ SECTION ------` blocks — the thing that would
   actually tame the other 134,960 lines. Explicitly a different change; this one only had to
   avoid making them worse, which it does (0 links).
-- **The next release must ship a rebuilt `core.wasm`.** The v0.1.0 assets on the Releases page
-  carry the pre-fix artifact — absolute `/Users/<name>/...` paths and a `producers` section.
-  Decided on 2026-08-19 not to cut a 0.1.1 for metadata alone, since no behaviour changed; the
-  fix rides along with the first release that has a real reason to exist. Whoever cuts it should
-  confirm the published binary no longer contains the builder's username.
+- ~~**The next release must ship a rebuilt `core.wasm`.**~~ **Done, 2026-08-20 (v0.2.0).**
+  Confirmed the way the item asked: the wasm served by a binary installed from crates.io
+  contains no `/Users/…` path, no builder username and no `producers` section.
 - Nobody has run the Linux binary on a Linux machine — `ship-0-1-0-release` task 6.2, left open
   in its archive on purpose. The runner smoke-tested it and the downloaded file is confirmed
   `static-pie linked`, but that is not the same claim.
