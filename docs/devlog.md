@@ -2589,6 +2589,18 @@ made the failing stage visible through the jobs API (step names and conclusions 
 
 ## Ideas for later
 
+- **The next release must ship a rebuilt `core.wasm`.** The v0.1.0 assets on the Releases page
+  carry the pre-fix artifact — absolute `/Users/<name>/...` paths and a `producers` section.
+  Decided on 2026-08-19 not to cut a 0.1.1 for metadata alone, since no behaviour changed; the
+  fix rides along with the first release that has a real reason to exist. Whoever cuts it should
+  confirm the published binary no longer contains the builder's username.
+- Nobody has run the Linux binary on a Linux machine — `ship-0-1-0-release` task 6.2, left open
+  in its archive on purpose. The runner smoke-tested it and the downloaded file is confirmed
+  `static-pie linked`, but that is not the same claim.
+- `actions/checkout@v4` and `actions/setup-node@v4` run on Node 20, which GitHub has deprecated;
+  every CI run carries the warning annotation. Moving to v5 is unrelated to any current failure,
+  which is why it was deliberately not folded into the staleness fix.
+
 - Resizable rail/detail panes, deliberately deferred by `frontend-three-pane-layout`'s Non-Goals
   rather than half-built; the widths are fixed at 18rem/22rem today.
 - A disk-backed or larger in-page benchmark harness (median/stddev over many runs,
