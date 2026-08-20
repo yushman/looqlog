@@ -2758,8 +2758,46 @@ oblige us to keep publishing someone else's endpoint. The measurement really was
 against a real 168,260-line corpus, and every number in the entries above still refers to
 it.
 
+## 2026-08-20 (fifth entry) — the staleness job caught a real one, and I could not explain it
+
+The `v0.2.0` push turned `frontend-artifact-staleness` red: committed `core.wasm` 216,854
+bytes, CI's rebuild 216,857, with 15,193 differing bytes.
+
+Three hypotheses, all refuted by measurement rather than argument:
+
+- **Toolchain drift**, the cause the last two times. Refuted: current stable is 1.97.1,
+  byte-identical to this machine's, `wasm-pack` is 0.15.0 on both, binaryen is pinned to
+  132 in CI and checked in `build-frontend.sh`.
+- **The version bump.** `Cargo.lock` moved only the three workspace versions, no
+  dependency budged. Refuted directly: setting the workspace back to `0.1.0` and
+  rebuilding still produced 216,857.
+- **A path-length difference**, the class `--remap-path-prefix` was added for — plausible,
+  since `/looq` → `/looqlog` is exactly +3 characters. Refuted: `diff` of the two string
+  tables is empty. Every embedded path, including
+  `/cargo/registry/src/index.crates.io-…`, is identical. The entire delta is in the code
+  section — the differing bytes are `i32.const`, `i32.add`, `global.set` and LEB128
+  operands, not text.
+
+What is established: **this machine reproduces CI's 216,857 exactly**, and two consecutive
+local rebuilds are byte-identical to each other. So the pipeline is deterministic now, and
+the anomaly is whatever produced 216,854 during the rename work — a build I can no longer
+reproduce from the same sources with the same tools. Committed the reproducible artifact.
+
+The uncomfortable part is worth stating plainly rather than dressing up: the check did its
+job, and I do not know what it caught. A byte-exact vendored artifact is only as
+trustworthy as our ability to explain a diff in it, and this one went unexplained.
+
 ## Ideas for later
 
+- The 216,854-byte `core.wasm` from the rename work is unexplained (entry above). If the
+  staleness job fires again with no source change, capture the failing artifact and
+  `wasm-dis` both sides before rebuilding — the code-section diff is the only remaining
+  lead, and it was thrown away this time by rebuilding over it.
+- CI installs the toolchain with `dtolnay/rust-toolchain@stable` and `wasm-pack` from npm
+  unpinned, while binaryen is pinned to 132. Two of the three inputs to a byte-exact
+  artifact float. They happened to match this time — checked, they did — but the next
+  stable release will fail the staleness job on somebody's unrelated push, and it will
+  look like their fault.
 - `free_port()` in `crates/looqlog/tests/cli.rs` documents itself as a "Small TOCTOU race in
   theory; in practice fine for tests run in this sandbox". During the `rename-to-looqlog` work it
   fired once for real — a single `cli.rs` failure that did not reproduce on two reruns. The
