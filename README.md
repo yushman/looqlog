@@ -6,7 +6,13 @@ leave your machine.
 
 [Русская версия](README.ru.md) · [Website](https://yushman.github.io/looqlog/)
 
-> **Status: v0.1.0, feature-complete MVP.** The server, CLI, browser-side parser
+> **Status: v0.2.0, on [crates.io](https://crates.io/crates/looqlog).** Since v0.1.0 the
+> project was renamed from `looq` (see
+> [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)) and learned to group multi-line
+> events: Java stack traces, Python tracebacks and pretty-printed payloads collapse into
+> the entry they continue, and the timeline counts events rather than physical lines.
+>
+> The server, CLI, browser-side parser
 > (JSON Lines / logfmt / plain text, auto-detected — with syslog, klog, Apache/CLF and
 > Docker-wrapped lines read through the plain-text path, see "Supported log formats")
 > and live stdin streaming exist

@@ -15,140 +15,134 @@
 <header class="hero wrap">
   <h1>▪ looq<span>log</span></h1>
   <p class="tag">A timeline for your log file, without uploading it anywhere.</p>
-  <p class="sub">One binary. Point it at a file or pipe a stream into it, and a browser tab opens with a
-  histogram timeline, filter chips, full-text and regex search over a table that stays smooth at any size.
-  In file mode the log is read by the browser and never reaches the backend at all.</p>
-  <div class="badges">
-    <span class="badge">MIT</span>
-    <span class="badge">One static binary</span>
-    <span class="badge">Rust + WebAssembly</span>
-    <span class="badge">No config, no server, no account</span>
+  <p class="sub">One binary. Point it at a file or pipe a stream into it, and a browser tab opens.</p>
+  <div class="install">
+    <span class="p">$</span><code id="cmd">cargo install looqlog</code>
+    <button onclick="navigator.clipboard.writeText('cargo install looqlog').then(()=>{this.textContent='copied';setTimeout(()=>this.textContent='copy',1200)})">copy</button>
   </div>
   <div class="cta">
-    <a class="primary" href="https://crates.io/crates/looqlog">cargo install looqlog</a>
     <a class="ghost" href="https://github.com/yushman/looqlog">GitHub</a>
-    <a class="ghost" href="#start">Quickstart</a>
+    <a class="ghost" href="https://github.com/yushman/looqlog/releases/latest">Download a binary</a>
+  </div>
+  <div class="badges">
+    <span class="badge">MIT</span>
+    <span class="badge">~21 ms cold start</span>
+    <span class="badge">Rust + WebAssembly</span>
+    <span class="badge">No config, no account</span>
   </div>
 </header>
 
 <section class="wrap">
+  <div class="shot"><img src="overview.png" alt="The looqlog interface: a timeline across the top, filter chips on the left, and a virtual-scrolled table of log entries"></div>
+  <p class="caption">Timeline on top, chips from the fields actually found, table below — one dataset, so
+  narrowing one narrows the others.</p>
+</section>
+
+<section class="wrap">
   <h2>One command, then a browser tab</h2>
-  <p class="lead">No config file, no daemon, no index to build first. The format is detected from the first
-  lines and can be overridden if the guess is wrong.</p>
 <pre><span class="c"># a file on disk — parsed in the browser, never sent to the backend</span>
 $ looqlog /var/log/app.log
 <span class="c">  serving on</span> <span class="b">http://127.0.0.1:7891</span>
 
 <span class="c"># a live stream — anything that writes to stdout</span>
 $ kubectl logs -f deploy/api | looqlog
-$ docker logs -f web | looqlog
-$ tail -F /var/log/syslog | looqlog
-
-<span class="c"># pick the format yourself when detection guesses wrong</span>
-$ looqlog app.log <span class="c">then open</span> <span class="b">#format=logfmt</span></pre>
-  <div class="shot"><img src="overview.png" alt="The looqlog interface: a timeline across the top, filter chips on the left, and a virtual-scrolled table of log entries"></div>
-  <p class="caption">What opens. Timeline on top, chips built from the fields that were actually found,
-  table below — all of it over the same dataset, so narrowing one narrows the others.</p>
+$ tail -F /var/log/syslog | looqlog</pre>
 </section>
 
 <section class="wrap">
   <h2>Measured, not estimated</h2>
-  <p class="lead">Every number below came off a benchmark or a stopwatch on a real binary, and the command
-  that produced it is recorded in the project's
-  <a href="https://github.com/yushman/looqlog/blob/main/docs/devlog.md">devlog</a> — including the runs that
-  went badly.</p>
+  <p class="lead">Every number came off a benchmark or a stopwatch on a real binary, with the command
+  recorded in the <a href="https://github.com/yushman/looqlog/blob/main/docs/devlog.md">devlog</a>.</p>
   <div class="numbers">
-    <div class="num"><b>~21 ms</b><span>from process start to a page that answers, averaged over five runs</span></div>
-    <div class="num"><b>80 ms/MB</b><span>parse throughput on 50–200 MB files, against a 200 ms/MB budget</span></div>
-    <div class="num"><b>3.6 ms</b><span>to re-filter 10,000 entries — average, 9.8 ms at worst</span></div>
-    <div class="num"><b>36 rows</b><span>actually in the DOM while 50,000 entries scroll</span></div>
+    <div class="num"><b>~21 ms</b><span>cold start, averaged over five runs</span></div>
+    <div class="num"><b>80 ms/MB</b><span>parsing 50–200 MB files</span></div>
+    <div class="num"><b>3.6 ms</b><span>to re-filter 10,000 entries</span></div>
+    <div class="num"><b>36 rows</b><span>in the DOM while 50,000 scroll</span></div>
   </div>
 </section>
 
 <section class="wrap">
-  <span class="badge">Where the time went</span>
-  <h2 style="margin-top:14px">Filter, and the rest of the shape stays visible</h2>
-  <p class="lead">Chips are built from the fields the parser actually found, with counts. Narrowing to
-  <code>level=ERROR</code> redraws the timeline over a muted copy of the unfiltered data, so a filter that
-  matched almost nothing reads as "filtered to nothing" rather than "no data" — and a burst you were
-  looking for stops hiding under the noise.</p>
+  <h2>Filter, and the rest of the shape stays visible</h2>
   <div class="shot"><img src="filter.png" alt="The timeline showing errors highlighted over the muted unfiltered series, with level and status filter chips on the left"></div>
-  <p class="caption">1,428 lines of mixed service logs, narrowed to errors. The spike at 14:09 is an incident.</p>
+  <p class="caption">Narrowed to errors. The filtered series is drawn over a muted copy of the whole, so
+  the spike at 14:09 stops hiding in the noise.</p>
 </section>
 
 <section class="wrap">
-  <span class="badge">Multi-line events</span>
-  <h2 style="margin-top:14px">A stack trace is one event, not sixty rows</h2>
-  <p class="lead">Java stack traces, Python tracebacks and pretty-printed payloads are recognised as
-  continuations of the entry above them and collapse into it. The timeline counts events rather than
-  physical lines, so one exception is one bar and not a wall of them. A search that matches a frame in the
-  middle of a trace surfaces the exception it belongs to, rather than the naked frame.</p>
+  <h2>A stack trace is one event, not sixty rows</h2>
   <div class="shot"><img src="trace.png" alt="A collapsed stack trace expanded under its parent row, showing the exception header and six indented frames"></div>
-  <p class="caption">Row 983 carries eight lines. Recognition uses explicit frame markers, never indentation
-  alone — on a 168,260-line Android bugreport that rule fires zero times across 134,960 lines of
-  unprefixed dump text.</p>
+  <p class="caption">Row 983 carries eight lines. The timeline counts events, so one exception is one bar.
+  Recognition uses explicit frame markers, never indentation alone.</p>
 </section>
 
 <section class="wrap">
-  <h2>Formats it reads</h2>
-  <p class="lead">JSON Lines, logfmt and plain text, auto-detected. Inside the plain-text path it also
-  recognises leading timestamp shapes and reads what follows them: syslog, klog, Apache/CLF, Docker-wrapped
-  stdout and Android logcat, including logcat's uid/pid/tid columns and tag, which become filterable fields
-  rather than message noise.</p>
-  <p class="lead" style="margin-top:14px">A line it cannot parse is skipped <em>and reported</em>, with the
-  line number and the reason. Entries produced plus lines skipped plus blank lines always equals the total
-  line count — a log viewer that quietly loses lines is worse than no log viewer.</p>
-</section>
-
-<section class="wrap" id="start">
-  <h2>Quickstart</h2>
-  <div class="steps">
-    <div class="step"><div><b>Install.</b> <code>cargo install looqlog</code>, or grab a binary from
-    <a href="https://github.com/yushman/looqlog/releases/latest">Releases</a> (Linux x86_64 static, macOS
-    arm64 and x86_64). Nothing else to install — the UI is compiled into the binary.</div></div>
-    <div class="step"><div><b>Open something.</b> <code>looqlog app.log</code> for a file, or pipe a stream
-    into it. The address is printed; <code>--open</code> launches the browser for you.</div></div>
-    <div class="step"><div><b>Share the view, not the log.</b> Filters, search text and the selected time
-    range live in the URL fragment. Send someone the link and they land on the same view of
-    <em>their own</em> copy — the fragment never leaves the browser.</div></div>
+  <h2>What it reads</h2>
+  <div class="grid3">
+    <div class="card">
+      <h3>Three formats, auto-detected</h3>
+      <p>JSON Lines, logfmt, plain text. Override with <code>#format=</code> when the guess is wrong.</p>
+    </div>
+    <div class="card">
+      <h3>Prefixes it recognises</h3>
+      <p>syslog, klog, Apache/CLF, Docker-wrapped stdout, Android logcat — columns and tag become fields.</p>
+    </div>
+    <div class="card">
+      <h3>Nothing lost quietly</h3>
+      <p>Unparseable lines are skipped <em>and reported</em>. Entries + skipped + blank always equals the
+      total.</p>
+    </div>
   </div>
 </section>
 
 <section class="wrap">
   <h2>Privacy, stated precisely</h2>
-  <p class="lead">The two modes do not carry the same guarantee, and collapsing them into one slogan would
-  be a lie in one direction.</p>
   <div class="split">
     <div class="card">
       <h3>File mode — never leaves the browser</h3>
-      <p>The file is read through the browser's File API and parsed by WebAssembly in the tab. The backend
-      never opens it, and no request carries its contents. Turn off the network after the page loads and
-      everything still works.</p>
+      <p>Read through the File API, parsed by WebAssembly in the tab. The backend never opens it. Kill
+      the network after load and it still works.</p>
     </div>
     <div class="card warnish">
       <h3>Stdin mode — never leaves the machine</h3>
-      <p>Lines travel from the CLI process to the browser over a localhost WebSocket in the clear, guarded
-      by an origin check and a per-process token. That stops another page in your browser; it does not stop
-      another process on the same machine.</p>
+      <p>Lines cross a localhost WebSocket, guarded by an origin check and a per-process token. That stops
+      another browser tab, not another local process.</p>
     </div>
   </div>
-  <p class="lead" style="margin-top:18px">Nothing phones home in either mode. There is no hosted service, no
-  telemetry, no CDN at runtime, and no account.</p>
+  <p class="lead" style="margin-top:18px">Nothing phones home either way. No hosted service, no telemetry,
+  no CDN at runtime, no account.</p>
 </section>
 
 <section class="wrap">
-  <h2>Why not just use something else?</h2>
-  <p class="lead"><strong>Use <code>lnav</code> if you live in the terminal</strong> — it is excellent, it
-  has a decade of polish, and it never leaves your shell. looqlog exists because a histogram over time, a
-  drag-to-select range and a filter panel are things a browser does better than a TUI, and because handing
-  a colleague a URL is easier than handing them a keybinding.</p>
-  <p class="lead" style="margin-top:16px"><strong>Use Kibana or Grafana if you already run them.</strong>
-  They win the moment you have more than one machine's logs. looqlog is for the file already on your disk
-  and the stream already in your terminal — no ingestion, no index, no infrastructure to stand up before
-  you can look at anything.</p>
-  <p class="lead" style="margin-top:16px"><strong>Do not use an online log viewer.</strong> Pasting
-  production logs into a web form sends them to someone else's server. That is the specific thing this
-  tool exists to make unnecessary.</p>
+  <h2>Use something else when it fits better</h2>
+  <div class="grid3">
+    <div class="card">
+      <h3>Reach for <code>lnav</code> in the terminal</h3>
+      <p>Excellent, a decade of polish, never leaves your shell. Pick looqlog when a drag-to-select
+      timeline beats a keybinding.</p>
+    </div>
+    <div class="card">
+      <h3>Kibana or Grafana, if they are already up</h3>
+      <p>They win the moment logs come from more than one machine. looqlog needs no ingestion and no
+      index.</p>
+    </div>
+    <div class="card warnish">
+      <h3>Not an online log viewer</h3>
+      <p>Pasting production logs into a web form sends them to someone else's server. That is what this
+      exists to make unnecessary.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>Three steps</h2>
+  <div class="steps">
+    <div class="step"><div><b>Install.</b> <code>cargo install looqlog</code>, or a binary from
+    <a href="https://github.com/yushman/looqlog/releases/latest">Releases</a>. The UI is inside it.</div></div>
+    <div class="step"><div><b>Open something.</b> <code>looqlog app.log</code>, or pipe a stream in.
+    <code>--open</code> launches the browser for you.</div></div>
+    <div class="step"><div><b>Share the view, not the log.</b> Filters and range live in the URL fragment,
+    which never leaves the browser.</div></div>
+  </div>
 </section>
 
 <footer>

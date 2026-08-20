@@ -6,7 +6,14 @@ live-потока из stdin. Парсинг происходит в WebAssembly
 
 [English version](README.md) · [Сайт](https://yushman.github.io/looqlog/ru.html)
 
-> **Статус: v0.1.0, MVP полностью реализован.** Сервер, CLI, парсер на стороне
+> **Статус: v0.2.0, опубликован на [crates.io](https://crates.io/crates/looqlog).** После
+> v0.1.0 проект переименован из `looq` (см.
+> [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)) и научился склеивать
+> многострочные события: Java-трейсы, питоновские traceback'и и развёрнутые payload'ы
+> сворачиваются в запись, которую они продолжают, а таймлайн считает события, а не
+> физические строки.
+>
+> Сервер, CLI, парсер на стороне
 > браузера (JSON Lines / logfmt / plain text, с авто-определением формата — а syslog,
 > klog, Apache/CLF и обёрнутые Docker'ом строки читаются через plain-text путь, см.
 > «Поддерживаемые форматы логов») и live-стриминг stdin работают end-to-end. В режиме файла парсер работает в Web
