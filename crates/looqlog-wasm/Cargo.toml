@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+# Never published: this is a `cdylib` consumed by `wasm-pack`, whose output is
+# vendored into `crates/looqlog/assets/` (ADR-0008). Nobody installs it from the
+# registry, and publishing it would mean carrying a third crate version forever.
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]

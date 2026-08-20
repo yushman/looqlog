@@ -53,7 +53,7 @@ mode.
 
 ## Stack
 
-- Backend: Rust 1.74+, `axum` 0.8, `tokio`, `clap`, `tracing`
+- Backend: Rust 1.86+, `axum` 0.8, `tokio`, `clap`, `tracing`
 - Core parser (`looqlog-core`): target-agnostic Rust lib crate, no `wasm-bindgen`/`web-sys`
 - WASM adapter: `wasm-bindgen`, `serde-wasm-bindgen`, built via `wasm-pack`
 - Frontend: TypeScript (strict), Vite, Web Components, `uPlot`, `comlink`

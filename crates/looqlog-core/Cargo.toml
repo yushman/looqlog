@@ -5,6 +5,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+# Lower than the binary's 1.86 because this crate's runtime dependencies are only
+# `serde_json` and `chrono`. `criterion` pulls `clap` (1.85), but a dev-dependency
+# constrains benchmarking here, not anyone who depends on this crate.
+rust-version = "1.71"
+keywords = ["log", "logs", "parser", "logfmt", "jsonl"]
+categories = ["parser-implementations", "development-tools"]
 
 [dependencies]
 serde_json = "1"

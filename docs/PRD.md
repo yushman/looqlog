@@ -250,7 +250,7 @@ Stars/downloads — directional таргеты, не гарантированн�
 - TCP-порт 7891 (или случайный)
 
 ### Internal
-- Rust toolchain 1.74+
+- Rust toolchain 1.86+
 - Node.js 20+ (dev only, для сборки WASM/TS)
 - `wasm-pack` (dev)
 

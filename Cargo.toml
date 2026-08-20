@@ -7,10 +7,11 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/yushman/looqlog"
+homepage = "https://github.com/yushman/looqlog"
 
 [profile.release]
 opt-level = "s"

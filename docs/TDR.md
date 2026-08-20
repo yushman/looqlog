@@ -70,7 +70,7 @@ looqlog — single-binary CLI на Rust, запускающий локальны
 ## 4. Tech Stack
 
 ### Backend
-- **Rust 1.74+** (edition 2021)
+- **Rust 1.86+** (edition 2021)
 - `axum` 0.8 — HTTP-сервер + WebSocket
 - `tokio` 1.x — async runtime
 - `serde_json` 1.x — argv parsing
@@ -80,7 +80,7 @@ looqlog — single-binary CLI на Rust, запускающий локальны
 - `tracing` + `tracing-subscriber` — логи CLI
 
 ### Frontend (WASM core)
-- **Rust 1.74+** → `wasm-pack` → `core.wasm`
+- **Rust 1.86+** → `wasm-pack` → `core.wasm`
 - `wasm-bindgen` 0.2 — JS interop
 - `serde-wasm-bindgen` — типобезопасный обмен
 - `regex` 1.x — формат-детекторы
