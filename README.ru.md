@@ -4,7 +4,7 @@ Single-binary CLI, который поднимает локальный web UI �
 live-потока из stdin. Парсинг происходит в WebAssembly прямо в браузере — содержимое
 логов не покидает машину.
 
-[English version](README.md)
+[English version](README.md) · [Сайт](https://yushman.github.io/looqlog/ru.html)
 
 > **Статус: v0.1.0, MVP полностью реализован.** Сервер, CLI, парсер на стороне
 > браузера (JSON Lines / logfmt / plain text, с авто-определением формата — а syslog,

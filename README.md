@@ -4,7 +4,7 @@ Single-binary CLI that opens a local web UI for browsing a log file or a live st
 stream. Parsing happens in WebAssembly inside your own browser, so log contents never
 leave your machine.
 
-[Русская версия](README.ru.md)
+[Русская версия](README.ru.md) · [Website](https://yushman.github.io/looqlog/)
 
 > **Status: v0.1.0, feature-complete MVP.** The server, CLI, browser-side parser
 > (JSON Lines / logfmt / plain text, auto-detected — with syslog, klog, Apache/CLF and
