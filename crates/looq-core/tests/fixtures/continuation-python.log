@@ -1,0 +1,6 @@
+2026-08-08T17:42:11Z ERROR request handler failed
+Traceback (most recent call last):
+  File "app.py", line 12, in handler
+    return int(request.args["count"])
+ValueError: invalid literal for int() with base 10: 'many'
+2026-08-08T17:42:12Z INFO request completed

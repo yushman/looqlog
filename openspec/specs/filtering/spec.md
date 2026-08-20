@@ -8,7 +8,6 @@ value list for high-cardinality fields), the stated OR-within-a-field / AND-acro
 combination with the active time range and search text, filter state that is always visible and
 reversible, filters that keep applying as live entries arrive, and filtering fast enough to stay
 interactive at the supported dataset sizes.
-
 ## Requirements
 ### Requirement: Filter chips come from the field inventory
 The UI SHALL offer filter controls for `level` and for the fields the parser reported, showing each
@@ -83,7 +82,6 @@ TDR §11, measured and recorded rather than assumed.
 - **THEN** the measured time to updated results is recorded against the target, and a miss is
   either fixed or explicitly documented
 
-
 ### Requirement: Filter controls stay operable while entries arrive
 Updating filter controls with new counts from a live stream SHALL NOT replace or discard the controls
 themselves. A filter control SHALL remain the same element across such updates, so that an ordinary
@@ -104,3 +102,29 @@ values actually changes.
 #### Scenario: Counts still track the stream
 - **WHEN** live entries change how many entries carry a value
 - **THEN** the control's count updates without the control being rebuilt
+
+### Requirement: A continuation chain filters as one unit
+The active predicate SHALL be evaluated against a chain's root entry, and the whole chain
+SHALL be shown or hidden together. A chain member SHALL NOT be shown without its root, and a
+root SHALL NOT be shown with its members omitted, because a stack frame without the
+exception that produced it is not readable as a filter result.
+
+#### Scenario: A level filter shows the whole trace
+- **WHEN** `level=ERROR` is active and an `ERROR` entry has sixty stack frames beneath it,
+  none of which extracted a level of their own
+- **THEN** the root and all sixty frames are shown
+
+#### Scenario: A field on the root selects the chain
+- **WHEN** a `tag` chip matching only the chain root is active
+- **THEN** the root and all its members are shown
+
+#### Scenario: A chain the root does not match is hidden entirely
+- **WHEN** a filter excludes the chain root
+- **THEN** none of its members are shown, even if a member's own extracted fields would have
+  matched
+
+#### Scenario: An orphaned member behaves as a standalone entry
+- **WHEN** live-tail eviction has removed a chain root while its members are still retained
+- **THEN** each remaining member is filtered on its own values and rendered as an ordinary
+  standalone row, rather than being dropped or causing a failed lookup
+

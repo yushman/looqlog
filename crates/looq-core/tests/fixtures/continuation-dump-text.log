@@ -1,0 +1,20 @@
+"Signal Catcher" daemon prio=10 tid=2 Runnable
+  | group="system" sCount=0 ucsCount=0 flags=0 obj=0x13580148 self=0xb400007603ed92c0
+  | sysTid=834 nice=-20 cgrp=default sched=0/0 handle=0x74826ffcb0
+  | state=R schedstat=( 21365456 517710 11 ) utm=1 stm=0 core=6 HZ=100
+  | stack=0x7482608000-0x748260a000 stackSize=991KB
+  | held mutexes= "mutator lock"(shared held)
+  native: #00 pc 000000000055f850  /apex/com.android.art/lib64/libart.so (art::DumpNativeStack(std::__1::basic_ostream<char, std::__1::char_traits<char> >&, int, BacktraceMap*, char const*, art::ArtMethod*, void*, bool)+140)
+  native: #01 pc 0000000000676270  /apex/com.android.art/lib64/libart.so (art::Thread::DumpStack(std::__1::basic_ostream<char, std::__1::char_traits<char> >&, bool, BacktraceMap*, bool) const+360)
+  native: #02 pc 0000000000693f4c  /apex/com.android.art/lib64/libart.so (art::DumpCheckpoint::Run(art::Thread*)+920)
+  native: #03 pc 000000000068da70  /apex/com.android.art/lib64/libart.so (art::ThreadList::RunCheckpoint(art::Closure*, art::Closure*)+520)
+  native: #00 pc 000000000009e498  /apex/com.android.runtime/lib64/bionic/libc.so (__epoll_pwait+8)
+  native: #01 pc 0000000000016628  /system/lib64/libutils.so (android::Looper::pollInner(int)+180)
+  native: #02 pc 000000000001650c  /system/lib64/libutils.so (android::Looper::pollOnce(int, int*, int*, void**)+112)
+  native: #03 pc 0000000000157bac  /system/lib64/libandroid_runtime.so (android::android_os_MessageQueue_nativePollOnce(_JNIEnv*, _jobject*, long, int)+44)
+  at android.os.MessageQueue.nativePollOnce(Native method)
+  at android.os.MessageQueue.next(MessageQueue.java:335)
+  at android.os.Looper.loopOnce(Looper.java:161)
+  at android.os.Looper.loop(Looper.java:288)
+  at com.android.server.SystemServer.run(SystemServer.java:912)
+  at com.android.server.SystemServer.main(SystemServer.java:619)

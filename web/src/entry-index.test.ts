@@ -12,6 +12,7 @@ function mkEntry(ordinal: number, timestamp: string | null, message = `m${ordina
     level: null,
     message,
     fields: {},
+    continuationOf: null,
   };
 }
 
@@ -196,6 +197,7 @@ function mkLeveled(ordinal: number, tsMs: number, level: string | null): EntryDt
     level,
     message: `m${ordinal}`,
     fields: {},
+    continuationOf: null,
   };
 }
 
@@ -268,5 +270,115 @@ describe("EntryIndex — level counts", () => {
 
     idx.evictFront(1); // evicts the second ERROR
     expect(idx.levelStats.has("ERROR")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Continuation chains (`multiline-entry-continuations`, tasks 5.2–5.4).
+// ---------------------------------------------------------------------------
+
+/** A chain member: same shape as `mkLeveled`, plus the link at its root. */
+function mkMember(ordinal: number, tsMs: number, root: number, message = `m${ordinal}`): EntryDto {
+  return {
+    ordinal,
+    timestamp: iso(tsMs),
+    timestampUsedDefaultTz: false,
+    timestampYearInferred: false,
+    level: null,
+    message,
+    fields: {},
+    continuationOf: root,
+  };
+}
+
+describe("EntryIndex — a chain is one event", () => {
+  it("counts a chain once per bucket, not once per line (timeline spec)", () => {
+    const idx = new EntryIndex();
+    idx.append([
+      mkLeveled(1, 0, "ERROR"),
+      mkMember(2, 1, 1),
+      mkMember(3, 2, 1),
+      mkMember(4, 3, 1),
+      mkLeveled(5, 4, "INFO"),
+    ]);
+    // Five rows in the table, two events on the timeline.
+    expect(idx.totalCount).toBe(5);
+    expect(idx.bucketCounts(0, 1000, 1)).toEqual([2]);
+    expect(idx.bucketCountsUnfiltered(0, 1000, 1)).toEqual([2]);
+  });
+
+  it("keeps robustSpan/fullSpan over every timestamped entry, members included", () => {
+    const idx = new EntryIndex();
+    idx.append([mkLeveled(1, 0, "ERROR"), mkMember(2, 5000, 1)]);
+    expect(idx.fullSpan()).toEqual({ minMs: 0, maxMs: 5000 });
+  });
+
+  it("shows or hides a chain as a unit, deciding on the root", () => {
+    const idx = new EntryIndex();
+    idx.append([mkLeveled(1, 0, "ERROR"), mkMember(2, 1, 1), mkMember(3, 2, 1), mkLeveled(4, 3, "INFO")]);
+    idx.setPredicate({ root: (e) => e.level === "ERROR", member: () => true });
+    // The frames extracted no level of their own; they are shown because their root
+    // matched (`filtering` spec, "A level filter shows the whole trace").
+    expect(idx.entriesInInputOrder().map((e) => e.ordinal)).toEqual([1, 2, 3]);
+  });
+
+  it("hides every member of a chain whose root does not match, even one that would", () => {
+    const idx = new EntryIndex();
+    idx.append([mkLeveled(1, 0, "INFO"), mkMember(2, 1, 1), mkLeveled(3, 2, "ERROR")]);
+    const member = idx.getByOrdinal(2)!;
+    (member as { level: string | null }).level = "ERROR";
+    idx.setPredicate({ root: (e) => e.level === "ERROR", member: () => true });
+    expect(idx.entriesInInputOrder().map((e) => e.ordinal)).toEqual([3]);
+  });
+
+  it("surfaces the root when the query matches only a member (search spec)", () => {
+    const idx = new EntryIndex();
+    idx.append([
+      mkLeveled(1, 0, "ERROR"),
+      mkMember(2, 1, 1, "at com.example.IoBridge.connect"),
+      mkMember(3, 2, 1, "at com.example.Other.run"),
+      mkLeveled(4, 3, "INFO"),
+    ]);
+    idx.setPredicate({ root: () => true, member: (e) => e.message.includes("IoBridge") });
+    // The chain appears once, whole — never a naked frame with no indication of which
+    // exception it belonged to.
+    expect(idx.entriesInInputOrder().map((e) => e.ordinal)).toEqual([1, 2, 3]);
+  });
+
+  it("surfaces the chain once when several members match", () => {
+    const idx = new EntryIndex();
+    idx.append([mkLeveled(1, 0, "ERROR"), mkMember(2, 1, 1, "IoBridge a"), mkMember(3, 2, 1, "IoBridge b")]);
+    idx.setPredicate({ root: () => true, member: (e) => e.message.includes("IoBridge") });
+    expect(idx.entriesInInputOrder().map((e) => e.ordinal)).toEqual([1, 2, 3]);
+    expect(idx.matchingCount).toBe(3);
+  });
+
+  it("pulls in an already-retained chain when a matching member arrives live", () => {
+    const idx = new EntryIndex();
+    idx.append([mkLeveled(1, 0, "ERROR")]);
+    idx.setPredicate({ root: () => true, member: (e) => e.message.includes("IoBridge") });
+    expect(idx.matchingCount).toBe(0);
+    idx.append([mkMember(2, 1, 1, "at com.example.IoBridge.connect")]);
+    expect(idx.entriesInInputOrder().map((e) => e.ordinal)).toEqual([1, 2]);
+  });
+
+  it("treats a member orphaned by eviction as an ordinary standalone entry", () => {
+    const idx = new EntryIndex();
+    idx.append([mkLeveled(1, 0, "ERROR"), mkMember(2, 1000, 1), mkMember(3, 2000, 1)]);
+    idx.evictFront(1); // the root goes; its members stay
+    // No failed lookup, no dropped rows — and each orphan is now its own event.
+    expect(idx.entriesInInputOrder().map((e) => e.ordinal)).toEqual([2, 3]);
+    expect(idx.bucketCountsUnfiltered(0, 10_000, 1)).toEqual([2]);
+    // …and is filtered on its own values rather than on a root that is gone.
+    idx.setPredicate({ root: (e) => e.ordinal === 3, member: () => true });
+    expect(idx.entriesInInputOrder().map((e) => e.ordinal)).toEqual([3]);
+  });
+
+  it("keeps the chain intact when only a member is evicted", () => {
+    const idx = new EntryIndex();
+    idx.append([mkLeveled(1, 0, "ERROR"), mkMember(2, 1000, 1), mkMember(3, 2000, 1)]);
+    expect(idx.membersOf(1)).toEqual([2, 3]);
+    idx.evictFront(2); // root and first member
+    expect(idx.membersOf(1)).toEqual([]);
   });
 });

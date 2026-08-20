@@ -13,7 +13,8 @@ use std::collections::BTreeMap;
 use super::{json, logfmt, Extracted};
 use crate::entry::FieldValue;
 use crate::level;
-use crate::timestamp::{self, LogcatRecord, ParseContext};
+use crate::parser::MAX_CHAIN_LINES;
+use crate::timestamp::{self, LeadingMatch, LogcatRecord, ParseContext};
 
 /// Field the prefix timestamp is kept under when a parsed payload disagrees with it
 /// (design.md D7). The disagreement stays inspectable and filterable instead of being
@@ -53,20 +54,27 @@ fn logcat_fields(record: &LogcatRecord<'_>) -> BTreeMap<String, FieldValue> {
 /// One entry, always. Extracts a leading timestamp, a level and a structured payload
 /// when recognisable patterns are present; all three stay absent otherwise.
 pub fn parse_line(line: &str, ctx: &ParseContext) -> Extracted {
-    let Some(matched) = timestamp::extract_leading(line, ctx) else {
-        // No recognised prefix: today's behavior, unchanged. The whole line is the
-        // message and the level scan is the only thing that runs.
-        return Extracted {
-            timestamp: None,
-            timestamp_used_default_tz: false,
-            timestamp_year_inferred: false,
-            timestamp_diagnostic: None,
-            level: level::scan_message(line),
-            message: Some(line.to_string()),
-            fields: Default::default(),
-        };
-    };
+    match timestamp::extract_leading(line, ctx) {
+        Some(matched) => parse_prefixed(matched, ctx),
+        None => parse_unprefixed(line),
+    }
+}
 
+/// No recognised prefix: today's behavior, unchanged. The whole line is the message
+/// and the level scan is the only thing that runs.
+fn parse_unprefixed(line: &str) -> Extracted {
+    Extracted {
+        timestamp: None,
+        timestamp_used_default_tz: false,
+        timestamp_year_inferred: false,
+        timestamp_diagnostic: None,
+        level: level::scan_message(line),
+        message: Some(line.to_string()),
+        fields: Default::default(),
+    }
+}
+
+fn parse_prefixed(matched: LeadingMatch<'_>, ctx: &ParseContext) -> Extracted {
     // Level by position (design.md D5): the klog/logcat severity letter the timestamp
     // scanner had to consume, else the token immediately after the prefix.
     let mut rest = matched.rest;
@@ -174,6 +182,301 @@ fn join_head(head: &str, rest: &str) -> String {
     } else {
         format!("{head} {rest}")
     }
+}
+
+// ---------------------------------------------------------------------------
+// Continuation recognition (`multiline-entry-continuations` design D3).
+//
+// Lookbehind only, always (design D1): "is this line a continuation?" is answered
+// from the current line plus remembered state about the line before it, never from a
+// line that has not arrived. That is what keeps `Parser::feed` returning the same
+// entries at the same moment it does today, with no flush obligation on the caller.
+// ---------------------------------------------------------------------------
+
+/// The chain root's logcat identity, owned. `LogcatRecord` borrows from the line it
+/// was scanned out of, which is gone by the time the next line arrives (design D10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LogcatIdentity {
+    pid: String,
+    tid: String,
+    tag: String,
+    /// The severity letter, which *is* the level for a logcat record. Compared as the
+    /// raw letter so `S` (silent, which maps to no level at all) still distinguishes
+    /// two records rather than collapsing into "both have no level".
+    letter: Option<u8>,
+}
+
+impl LogcatIdentity {
+    fn of(record: &LogcatRecord<'_>, letter: Option<u8>) -> Self {
+        Self {
+            pid: record.pid.to_string(),
+            tid: record.tid.to_string(),
+            tag: record.tag.to_string(),
+            letter,
+        }
+    }
+
+    /// Design D4: the timestamp is deliberately *not* part of the comparison. 830 of
+    /// the 831 measured frames share their root's millisecond and one does not —
+    /// including the timestamp would break exactly the trace long enough to cross a
+    /// millisecond boundary, which is the one a user most wants grouped.
+    fn matches(&self, record: &LogcatRecord<'_>, letter: Option<u8>) -> bool {
+        self.pid == record.pid
+            && self.tid == record.tid
+            && self.tag == record.tag
+            && self.letter == letter
+    }
+}
+
+/// The open chain: which entry roots it, what its root looked like, and how much of
+/// it has been consumed. Cleared on a blank line, on a line no recognizer accepts,
+/// when the brace depth returns to zero, and when the cap is exhausted.
+#[derive(Debug, Clone)]
+pub struct ChainState {
+    /// Ordinal (= line number) of the root entry. Every member links here, not to its
+    /// immediate predecessor (design D2).
+    root_ordinal: usize,
+    logcat: Option<LogcatIdentity>,
+    /// Unclosed `{` depth carried by the chain so far (design D5).
+    depth: usize,
+    /// Continuation lines linked so far, against `MAX_CHAIN_LINES` (design D8).
+    members: usize,
+    /// Line number of the most recent member (the root, initially). A chain only
+    /// continues onto the *immediately* following line: a gap means a blank line (or
+    /// a line the parser skipped) came between, which closes the chain. This is what
+    /// makes the blank-line break survive the sampling replay, where blank lines are
+    /// counted at read time and never re-fed to the format parsers.
+    last_line: usize,
+    /// The previous member was a Python `File "…", line N` frame, whose indented
+    /// source line follows it and carries no marker of its own.
+    after_file_frame: bool,
+}
+
+/// What the recognizers decided about one line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChainDecision {
+    /// Root ordinal this line continues, or `None` when it starts its own entry.
+    pub continuation_of: Option<usize>,
+    /// Root line number of a chain closed by the cap, for the `ChainTruncated`
+    /// diagnostic. Truncating silently is the defect (design D8).
+    pub truncated_root: Option<usize>,
+}
+
+/// As [`parse_line`], plus the continuation decision. Only the plain-text path calls
+/// this — JSON Lines and logfmt records are self-delimiting, so chaining under them
+/// would let a truncated record absorb the next one instead of being reported
+/// (design D6).
+pub fn parse_line_chained(
+    line: &str,
+    line_no: usize,
+    ctx: &ParseContext,
+    chain: &mut Option<ChainState>,
+) -> (Extracted, ChainDecision) {
+    let matched = timestamp::extract_leading(line, ctx);
+    // Copied out before `matched` is consumed: `LogcatRecord` and `rest_raw` borrow
+    // the line, not the match, so they outlive it.
+    let prefix = matched
+        .as_ref()
+        .map(|m| (m.logcat, m.rest_raw, m.level_letter));
+    let extracted = match matched {
+        Some(m) => parse_prefixed(m, ctx),
+        None => parse_unprefixed(line),
+    };
+    let message = extracted.message.as_deref().unwrap_or("");
+    let decision = resolve_chain(line, line_no, prefix, message, chain);
+    (extracted, decision)
+}
+
+type PrefixInfo<'a> = (Option<LogcatRecord<'a>>, &'a str, Option<u8>);
+
+fn resolve_chain(
+    line: &str,
+    line_no: usize,
+    prefix: Option<PrefixInfo<'_>>,
+    message: &str,
+    chain: &mut Option<ChainState>,
+) -> ChainDecision {
+    let mut decision = ChainDecision::default();
+    let mut close = false;
+
+    if let Some(state) = chain.as_mut() {
+        let accepted = line_no == state.last_line + 1
+            && match &prefix {
+                // R1 — a prefix-less frame, or the body of the Python `File` frame
+                // above it. R3 subsumes both while the root left a brace open.
+                None => {
+                    state.depth > 0
+                        || is_frame_marker(line)
+                        || (state.after_file_frame && starts_indented(line))
+                }
+                // R2 — a re-stamped logcat record with the root's identity and a
+                // message that carries a continuation signal of its own. Identity
+                // establishes candidacy; the message establishes continuation (D4).
+                Some((Some(record), rest_raw, letter)) => {
+                    state
+                        .logcat
+                        .as_ref()
+                        .is_some_and(|id| id.matches(record, *letter))
+                        && (logcat_message_indented(rest_raw)
+                            || is_frame_marker(message)
+                            || state.depth > 0)
+                }
+                // A line that starts a fresh prefixed entry of its own. It closes the
+                // chain and becomes the next candidate root.
+                Some((None, _, _)) => false,
+            };
+
+        if accepted {
+            if state.members >= MAX_CHAIN_LINES {
+                // Never silently (design D8): the chain closes, this line starts a
+                // fresh unlinked entry, and the truncation is reported.
+                decision.truncated_root = Some(state.root_ordinal);
+            } else {
+                let previous_depth = state.depth;
+                state.members += 1;
+                state.last_line = line_no;
+                state.depth = next_depth(previous_depth, message);
+                state.after_file_frame = is_python_file_frame(trim_ascii_start(message));
+                decision.continuation_of = Some(state.root_ordinal);
+                // A payload chain ends on the line that closes its outermost brace,
+                // so the next line starts a new entry.
+                close = previous_depth > 0 && state.depth == 0;
+            }
+        }
+    }
+
+    if close {
+        *chain = None;
+    }
+
+    if decision.continuation_of.is_none() {
+        // Shared guard (design D3): a chain is only ever opened beneath a line that
+        // carried a recognised timestamp prefix. That single rule is what keeps the
+        // 134,960 unprefixed dump lines of the measured bugreport from collapsing
+        // into a handful of enormous entries.
+        *chain = prefix.map(|(record, _, letter)| ChainState {
+            root_ordinal: line_no,
+            logcat: record.map(|r| LogcatIdentity::of(&r, letter)),
+            depth: next_depth(0, message),
+            members: 0,
+            last_line: line_no,
+            after_file_frame: is_python_file_frame(trim_ascii_start(message)),
+        });
+    }
+
+    decision
+}
+
+/// Blank lines close any open chain (design D3). Called by the parser, which counts
+/// blanks before any format parser sees them.
+pub fn close_chain(chain: &mut Option<ChainState>) {
+    *chain = None;
+}
+
+/// Only `{` and `}` are counted, never `[` and `]` (design D5): logcat carries raw
+/// ANSI escapes (`ESC[7m` from `top` output piped through `vhdnativeservice`), and
+/// counting square brackets reads every one of those as an opening bracket — 557
+/// lines left at positive depth in the measured corpus instead of 237.
+fn next_depth(depth: usize, text: &str) -> usize {
+    let mut depth = depth;
+    for b in text.bytes() {
+        match b {
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    depth
+}
+
+fn starts_indented(line: &str) -> bool {
+    matches!(line.as_bytes().first(), Some(b' ' | b'\t'))
+}
+
+/// A logcat message indented beyond the single space that always separates `TAG:`
+/// from the message — extra indentation is the signal, the separator is not.
+fn logcat_message_indented(rest_raw: &str) -> bool {
+    rest_raw
+        .strip_prefix(' ')
+        .is_some_and(|after| matches!(after.as_bytes().first(), Some(b' ' | b'\t')))
+}
+
+/// ASCII-only leading-whitespace trim, so the returned slice is always on a `str`
+/// char boundary (the byte-scanner style the rest of this crate uses; `regex` was
+/// rejected for the `core.wasm` budget, see the change's design).
+fn trim_ascii_start(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while matches!(bytes.get(i), Some(b' ' | b'\t')) {
+        i += 1;
+    }
+    &text[i..]
+}
+
+/// R1's explicit marker list. Positive evidence, never the mere absence of a prefix:
+/// "no prefix" fires on 134,960 lines of the measured corpus and "no prefix and
+/// indented" on 92,151, while these markers under a prefixed root fire on 0.
+fn is_frame_marker(text: &str) -> bool {
+    let t = trim_ascii_start(text);
+    t.starts_with("at ")
+        || t.starts_with("Caused by:")
+        || t.starts_with("Suppressed:")
+        || t.starts_with("Traceback (most recent call last):")
+        || is_ellipsis_more(t)
+        || is_python_file_frame(t)
+        || is_exception_header(t)
+}
+
+/// `... 14 more`, the tail a nested Java cause prints instead of repeating frames.
+fn is_ellipsis_more(t: &str) -> bool {
+    let Some(rest) = t.strip_prefix("... ") else {
+        return false;
+    };
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    digits > 0 && rest[digits..].trim() == "more"
+}
+
+/// `File "app.py", line 12, in handler`.
+fn is_python_file_frame(t: &str) -> bool {
+    let Some(rest) = t.strip_prefix("File \"") else {
+        return false;
+    };
+    let Some(at) = rest.find("\", line ") else {
+        return false;
+    };
+    rest[at + "\", line ".len()..]
+        .bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_digit())
+}
+
+/// An exception header: a dotted or bare identifier whose last segment ends in
+/// `Exception`, `Error` or `Throwable`, optionally followed by `: message`.
+///
+/// Not optional, and `tests/fixtures/stack-trace.log` is why: the header sits between
+/// the timestamped root and the `at …` frames with no marker of its own. Because the
+/// decision is lookbehind-only it cannot be linked retroactively once the frames prove
+/// what it was, so it has to be recognised in its own right — otherwise it breaks the
+/// chain and the frames below it are left with no prefixed root to attach to.
+fn is_exception_header(t: &str) -> bool {
+    let bytes = t.as_bytes();
+    let mut i = 0;
+    while bytes
+        .get(i)
+        .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'$' || *b == b'.')
+    {
+        i += 1;
+    }
+    if i == 0 {
+        return false;
+    }
+    // Every byte consumed above is ASCII, so both slices are on char boundaries.
+    let (ident, rest) = (&t[..i], &t[i..]);
+    if !(rest.is_empty() || rest.starts_with(':')) {
+        return false;
+    }
+    let last = ident.rsplit('.').next().unwrap_or(ident);
+    last.ends_with("Exception") || last.ends_with("Error") || last.ends_with("Throwable")
 }
 
 #[cfg(test)]

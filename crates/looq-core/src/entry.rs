@@ -57,4 +57,13 @@ pub struct Entry {
     pub message: String,
     /// Arbitrary fields other than the recognised timestamp/level/message keys.
     pub fields: BTreeMap<String, FieldValue>,
+    /// Ordinal of the **root** of the multi-line event this line continues, or `None`
+    /// for a line that starts its own entry (`multiline-entry-continuations` design
+    /// D1/D2). Deliberately the root and not the immediate predecessor: the UI needs
+    /// "which group is this row in", which stays a constant-time test that way, while
+    /// walking a predecessor chain would be O(chain length) per row.
+    ///
+    /// Nothing is merged — a continuation line still produces its own entry with its
+    /// own timestamp, level and fields; the link records grouping only.
+    pub continuation_of: Option<usize>,
 }

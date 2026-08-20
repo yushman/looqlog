@@ -28,6 +28,12 @@ export interface EntryDto {
   level: string | null;
   message: string;
   fields: Record<string, FieldValueDto>;
+  /** Ordinal of the root of the multi-line event this line continues, or `null` when
+   * the line starts its own entry (`multiline-entry-continuations` design D1/D2). It
+   * names the chain **root**, never the immediate predecessor, so "which group is this
+   * row in" stays a constant-time lookup. Always `number | null` and never
+   * `undefined`: the bridge serializes missing values as null. */
+  continuationOf: number | null;
 }
 
 /** No third variant for prefixed plain text: it reports `"threshold"` like any other
@@ -57,7 +63,8 @@ export type DiagnosticReasonKey =
   | "invalid_json"
   | "non_object_json"
   | "unparsable_timestamp"
-  | "encoding_fallback";
+  | "encoding_fallback"
+  | "chain_truncated";
 
 export interface DiagnosticDto {
   line: number;

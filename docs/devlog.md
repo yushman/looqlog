@@ -2587,8 +2587,104 @@ installed, so none of this was diagnosed by reading a log. Splitting the step in
 made the failing stage visible through the jobs API (step names and conclusions are public), and
 `::error::` annotations — readable on a public repo without auth — carried the actual text out.
 
+## 2026-08-20 — `multiline-entry-continuations`: a 36-frame trace is one row and one point
+
+PRD §14 Q3 has been open since day one. It is closed now, and not the way it was framed:
+nothing is merged. `Entry` gained `continuation_of: Option<usize>` — the ordinal of the
+**root** of the chain — and every physical line still produces its own entry.
+
+**Why marking rather than merging.** Merging needs lookahead: you cannot know an entry is
+finished until the line that does not continue it arrives. In stdin mode that means the last
+entry of a quiet stream is invisible forever, and ADR-0005 forbids the timer that would paper
+over it. Marking needs only lookbehind, so `feed()` returns exactly what it returned before, at
+the same moment. The hardest-looking question in the problem — what an entry whose continuation
+has not arrived yet should look like — turned out to be an artifact of the merging model, not a
+property of the task. Verified against a running binary, browser connected before the first
+line: root at t=12.8s, frame at 16.4s, frame at 20.4s, matching the emitter's 4-second spacing,
+`rows` staying 1 the whole time as the group grew.
+
+**Recognition is positive evidence only.** Measured on `.playwright-mcp/bugreport.txt`
+(168,260 lines): `extract_leading() == None` fires on 134,960 lines with a longest run of
+6,206; "unprefixed and indented" on 92,151, same longest run. Either rule swallows most of the
+file into a handful of entries. Explicit frame markers under a root that carried a recognised
+timestamp fire on 0 of those 134,960. The root-must-be-prefixed guard is what neutralises the
+VM TRACES section with no special-casing at all: those 3,344 bare `at …` lines follow
+`| held mutexes=` and `native: #03 pc …`, which carry no timestamp, so no chain is ever open
+above them. Confirmed in the browser: 0 links across lines 58,400–58,600.
+
+Whole-file result, same binary, same file: **173 chains covering 1,650 continuation lines out
+of 164,275 entries** — 1%. Largest chain 82 lines (the `BTB_UPDATER/ConfigRepositoryImpl`
+JSON payload at line 19,052). The `JAZZ/WebSocketClientImpl` `SocketTimeoutException` is 36
+lines and now renders as one row reading `Error websocket · 36 lines`; it ends exactly where it
+should, at `at java.lang.Thread.run(Thread.java:920)`, because the next line's tid changes from
+6108 to 30451.
+
+**The timeline number.** At `2026-04-21T12:56:57.372` the table has 37 rows and the timeline
+now counts **2** events. Over the whole second: 59 rows, 24 events. That is the intended
+reading, and it is a visible semantic change — timeline totals no longer equal table rows. Both
+READMEs say so.
+
+**Three decisions worth their own line.**
+- *Identity excludes the timestamp* (D4). 830 of 831 measured frames share their root's
+  millisecond and one does not — the `W System.err` block drifts from `.983` to `.984`.
+  Including the timestamp would break precisely the trace long enough to cross a millisecond
+  boundary. `(pid, tid, level, tag)` catches 831 of 831. But identity alone is not enough: 946
+  consecutive `NetworkSensitiveLogger: *` lines share it and are genuinely separate events, so
+  the message must carry its own signal. Identity establishes candidacy; the message
+  establishes continuation.
+- *Count `{`/`}`, never `[`/`]`* (D5). `vhdnativeservice` pipes `top` output through logcat, so
+  raw `ESC[7m` lands mid-message. With brackets counted, 557 lines end at positive depth; with
+  braces only, 237 — of which 198 are unprefixed dump text the root guard rejects, leaving 39
+  real payloads. A JSON *array* split across lines is therefore not recognised. Cheaper than
+  320 false chains.
+- *A multi-line JSON payload is grouped, not field-extracted* (D7). This is forced by the
+  marking model, not a scope preference: turning `response body = {` plus 40 lines into
+  `config.common.*` chips means amending an entry that was already emitted. `dispatch_payload`
+  is untouched and the payload root's only fields are `pid`/`tag`/`tid`/`uid` — verified in the
+  browser. Stated here so it is not rediscovered later as a bug.
+
+**Numbers and the commands that produced them.**
+
+```
+wc -c crates/looq/assets/wasm/core.wasm   # 210,165 → 216,841 bytes (+6,676, +3.2%)
+```
+72% of the ~300,000-byte TDR §5 budget; ~83,000 bytes of headroom left. No `regex` — every
+recognizer is a byte-prefix scan over ASCII, the same style as `timestamp.rs`.
+
+```
+cargo bench -p looq-core --bench parse -- --quick --save-baseline before   # on a clean tree
+cargo bench -p looq-core --bench parse -- --quick --baseline before        # with the change
+```
+"No change in performance detected" on all four: json −1.19%, logfmt −0.35%, plain −0.86%,
+plain_mixed_shapes +0.70%, every p > 0.05.
+
+**Two things the tests would not have caught without being written for them.**
+The blank-line break lives in `consume_line`, but blank lines are counted *before* the sampling
+buffer, so during detection replay the parser would have seen the lines either side of a blank
+as adjacent and chained through it. The chain therefore also refuses any line that is not the
+immediate successor of its last member. And R1's whole scenario — a prefix-less Java/Python
+trace — has **zero instances** in the bugreport, so verifying against the real corpus alone
+would have left the headline case completely untested; the synthetic fixtures were mandatory,
+not decoration.
+
+The exception-header marker is likewise not optional. In `stack-trace.log` the
+`java.lang.NullPointerException: …` line sits between the timestamped root and the `at …`
+frames with no marker of its own. Because the decision is lookbehind-only it cannot be linked
+retroactively once the frames prove what it was — so without the header rule it breaks the
+chain, and the frames below are left with no prefixed root to attach to.
+
 ## Ideas for later
 
+- A Python traceback's *source body* (`    return int(value)`) is linked by a
+  previous-line rule — the line after a `File "…", line N` frame, if indented — rather than by a
+  marker of its own, because it has none. Narrow and guarded, but it is the one recognizer that
+  depends on what the previous member was rather than on what this line is; worth revisiting if
+  a second such case ever appears.
+- Filtering on keys nested inside a multi-line JSON payload (D7's accepted gap). Would mean
+  revisiting the marking model, not patching this change.
+- Sectioning a bugreport into its `------ SECTION ------` blocks — the thing that would
+  actually tame the other 134,960 lines. Explicitly a different change; this one only had to
+  avoid making them worse, which it does (0 links).
 - **The next release must ship a rebuilt `core.wasm`.** The v0.1.0 assets on the Releases page
   carry the pre-fix artifact — absolute `/Users/<name>/...` paths and a `producers` section.
   Decided on 2026-08-19 not to cut a 0.1.1 for metadata alone, since no behaviour changed; the

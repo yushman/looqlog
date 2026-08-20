@@ -217,6 +217,25 @@ says so on every affected entry (*"year inferred — this timestamp shape carrie
 the detail view). A log older than about a year will be dated wrong; the flag is there so
 you can tell.
 
+**Multi-line events.** A stack trace, a Python traceback and a pretty-printed JSON payload
+are each one event that happens to span several lines, and looq links those lines back to
+the entry that starts them. It does so on positive evidence only: an explicit frame marker
+(`at `, `Caused by:`, `... N more`, `Suppressed:`, `Traceback (most recent call last):`,
+`File "…", line N`, or an exception header whose last dotted segment ends in `Exception`,
+`Error` or `Throwable`), a repeated logcat prefix whose `pid`, `tid`, level and `tag` match
+the line above and whose message is indented or itself a frame, or an unclosed `{` left open
+by the line above. A chain only ever opens beneath a line that carried a recognised
+timestamp, and a blank line closes it — which is what keeps a thread dump or a `dumpsys`
+section from collapsing into one giant entry. In the table the event is one collapsible row
+carrying its line count; filters are evaluated against its first line, so `level=ERROR` shows
+the whole trace; and a search hit on any line surfaces the whole event, expanded, with the
+matching line highlighted. A chain past 1,000 lines is closed and reported in Diagnostics
+rather than truncated quietly.
+
+> **Behavior change in this release.** The timeline counts *events*, not lines, so its totals
+> no longer equal the number of table rows. A 36-frame exception is one point on the timeline
+> instead of a spike that reads as 36 failures.
+
 ## Filtering, search and sharing a view
 
 Filters, search and the active time range all narrow the *same* dataset — the
@@ -357,9 +376,11 @@ anywhere, so both appearances render fully with the network disabled.
   written in `Europe/Belgrade` local time with no explicit offset is read as UTC. A
   full IANA timezone database (`chrono-tz`) would very likely have blown the
   `core.wasm` size budget the same way `regex` did (see `docs/devlog.md`).
-- **One physical line = one entry.** Multi-line payloads (e.g. a Java stack trace)
-  become N separate table rows, not one aggregated entry — a deliberate MVP scope
-  cut, not a parser bug.
+- **A multi-line event is grouped, not merged.** The lines of a stack trace or a
+  pretty-printed JSON payload are linked into one collapsible row and counted once on
+  the timeline, but each line is still its own entry underneath — and the keys nested
+  inside a multi-line JSON payload do not become filterable fields, because the line
+  that opens it is incomplete on its own and stays message text.
 - **Nested JSON objects/arrays are kept as raw text**, not flattened into dotted keys
   (`http.status`) — shown as-is in the detail view, not filterable by their nested
   fields.

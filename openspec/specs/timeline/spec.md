@@ -8,18 +8,23 @@ widths taken from a fixed ladder of round intervals, a default span chosen from 
 so a few absurd timestamps cannot destroy the axis, drag-selection that sets the shell's active time
 range, timestampless entries surfaced rather than silently dropped, and throttled redraws under live
 growth.
-
 ## Requirements
 ### Requirement: Count-per-bucket histogram
-The timeline SHALL render entry counts per time bucket for the entries matching the active
+The timeline SHALL render **event** counts per time bucket for the entries matching the active
 predicate, over a background series showing the unfiltered counts, so that what a filter excluded
-stays visible instead of simply disappearing. Bucket widths SHALL continue to come from a fixed
-ladder of human-readable intervals so that axis labels stay round at every zoom level.
+stays visible instead of simply disappearing. An entry that continues the entry above it SHALL NOT
+be counted, so a multi-line event contributes one count rather than one per physical line. Bucket
+widths SHALL continue to come from a fixed ladder of human-readable intervals so that axis labels
+stay round at every zoom level.
 
 #### Scenario: Counts match the source
-- **WHEN** a fixture with known timestamps is opened with no filters active
+- **WHEN** a fixture with known timestamps and no multi-line events is opened with no filters active
 - **THEN** each bucket's height corresponds to the number of entries whose timestamps fall in it,
   verifiable against a manual count
+
+#### Scenario: A stack trace is one count, not one per frame
+- **WHEN** a fixture containing a single exception with sixty stack frames in one bucket is opened
+- **THEN** that bucket's height is one, not sixty-one
 
 #### Scenario: Bucket width is readable
 - **WHEN** the visible span is around ten minutes

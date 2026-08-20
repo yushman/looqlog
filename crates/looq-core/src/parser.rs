@@ -25,6 +25,15 @@ pub const DEFAULT_DIAGNOSTIC_CAP: usize = 5_000;
 /// well before it could grow unbounded.
 pub const DEFAULT_FIELD_VALUE_CAP: usize = 10_000;
 
+/// Cap on the continuation lines one multi-line event may absorb
+/// (`multiline-entry-continuations` design D8). The HotSpot JVM prints at most 1,024
+/// frames for a `StackOverflowError` by default, so 1,000 sits just under the largest
+/// legitimate trace while bounding a runaway chain far below the 6,206-line unbroken
+/// run of dump text the measured bugreport contains. Exceeding it closes the chain and
+/// reports `DiagnosticReason::ChainTruncated` — a chain that stops quietly is
+/// indistinguishable from a trace that was genuinely short.
+pub const MAX_CHAIN_LINES: usize = 1_000;
+
 enum State {
     /// Buffering lines until either `detect::SAMPLE_SIZE` non-empty lines have been
     /// seen or `finish()` is called with fewer. `buffered_all` keeps every line
@@ -53,6 +62,9 @@ pub struct Parser {
     line_no: usize,
     blank_lines: usize,
     entries_emitted: usize,
+    /// The open multi-line event, if any (`multiline-entry-continuations` design
+    /// D10). Only the plain-text path ever sets it.
+    chain: Option<plain::ChainState>,
 }
 
 impl Parser {
@@ -89,6 +101,7 @@ impl Parser {
             line_no: 0,
             blank_lines: 0,
             entries_emitted: 0,
+            chain: None,
         }
     }
 
@@ -146,6 +159,12 @@ impl Parser {
 
         if text.trim().is_empty() {
             self.blank_lines += 1;
+            // A blank line closes any open multi-line event (design D3). The chain
+            // also refuses any line that is not the immediate successor of its last
+            // member, which is what covers the sampling replay below: blanks are
+            // counted here and never buffered, so the replay would otherwise see the
+            // lines either side of a blank as adjacent.
+            plain::close_chain(&mut self.chain);
             return;
         }
 
@@ -213,7 +232,7 @@ impl Parser {
     ) {
         match format {
             Format::Json => match json::parse_line(text, &self.ctx) {
-                Ok(extracted) => self.finish_entry(line_no, extracted, out),
+                Ok(extracted) => self.finish_entry(line_no, extracted, None, out),
                 Err(reason) => {
                     let (diag_reason, detail) = match reason {
                         json::MalformedReason::InvalidJson(detail) => {
@@ -229,16 +248,37 @@ impl Parser {
             },
             Format::Logfmt => {
                 let extracted = logfmt::parse_line(text, &self.ctx);
-                self.finish_entry(line_no, extracted, out);
+                self.finish_entry(line_no, extracted, None, out);
             }
             Format::Plain => {
-                let extracted = plain::parse_line(text, &self.ctx);
-                self.finish_entry(line_no, extracted, out);
+                let (extracted, decision) =
+                    plain::parse_line_chained(text, line_no, &self.ctx, &mut self.chain);
+                if let Some(root) = decision.truncated_root {
+                    self.diagnostics.record(
+                        line_no,
+                        DiagnosticReason::ChainTruncated,
+                        format!(
+                            "multi-line event starting at line {root} exceeded {MAX_CHAIN_LINES} \
+                             continuation lines; the rest are separate entries"
+                        ),
+                    );
+                }
+                self.finish_entry(line_no, extracted, decision.continuation_of, out);
             }
         }
     }
 
-    fn finish_entry(&mut self, line_no: usize, extracted: Extracted, out: &mut Vec<Entry>) {
+    /// `continuation_of` is whatever the recognizers decided (`None` for every format
+    /// but plain text). The line accounting is untouched: a continuation line still
+    /// emits its own entry, so `entries_emitted + blank_lines + diagnostics.total()`
+    /// still equals `total_lines`.
+    fn finish_entry(
+        &mut self,
+        line_no: usize,
+        extracted: Extracted,
+        continuation_of: Option<usize>,
+        out: &mut Vec<Entry>,
+    ) {
         if let Some(detail) = extracted.timestamp_diagnostic {
             self.diagnostics
                 .record(line_no, DiagnosticReason::UnparsableTimestamp, detail);
@@ -255,6 +295,7 @@ impl Parser {
             level: extracted.level,
             message: extracted.message.unwrap_or_default(),
             fields: extracted.fields,
+            continuation_of,
         });
     }
 

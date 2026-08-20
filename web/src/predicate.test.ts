@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildHaystack,
+  chainAwarePredicate,
   findMatchRanges,
   knownFieldNames,
   matchesFieldFilters,
   matchesPredicate,
   matchesQuery,
 } from "./predicate";
+import type { CompiledQuery } from "./predicate";
 import type { EntryDto, FieldInventoryDto } from "./wasm-types";
 
 function mkEntry(opts: Partial<EntryDto> & { ordinal: number }): EntryDto {
@@ -18,6 +20,7 @@ function mkEntry(opts: Partial<EntryDto> & { ordinal: number }): EntryDto {
     level: null,
     message: "",
     fields: {},
+    continuationOf: null,
     ...opts,
   };
 }
@@ -153,5 +156,23 @@ describe("findMatchRanges", () => {
 
   it("returns nothing for kind none", () => {
     expect(findMatchRanges("anything", { kind: "none" })).toEqual([]);
+  });
+});
+
+describe("chainAwarePredicate — the two halves a chain is judged by (design D9)", () => {
+  const filters = new Map([["level", new Set(["ERROR"])]]);
+  const query: CompiledQuery = { kind: "substring", needle: "iobridge" };
+
+  it("puts the field filters on the root half and the query on the member half", () => {
+    const pred = chainAwarePredicate(filters, query);
+    const root = mkEntry({ ordinal: 1, level: "ERROR", message: "connection failed" });
+    const frame = mkEntry({ ordinal: 2, level: null, message: "at com.example.IoBridge.connect", continuationOf: 1 });
+    // The frame carries no level of its own, so it could never pass the field half —
+    // which is exactly why the field half is only ever asked about the root.
+    expect(pred.root(root)).toBe(true);
+    expect(pred.root(frame)).toBe(false);
+    // The query half is what a member is allowed to satisfy on the chain's behalf.
+    expect(pred.member(frame)).toBe(true);
+    expect(pred.member(root)).toBe(false);
   });
 });

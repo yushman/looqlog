@@ -56,6 +56,12 @@ pub struct EntryDto {
     pub level: Option<String>,
     pub message: String,
     pub fields: BTreeMap<String, FieldValueDto>,
+    /// Ordinal of the root of the multi-line event this line continues, or `null` when
+    /// the line starts its own entry (`multiline-entry-continuations` design D1/D2).
+    /// Crosses as `number | null` and never `undefined`: the serializer is configured
+    /// with `serialize_missing_as_null(true)`, so a consumer testing `=== null` for
+    /// absence is correct.
+    pub continuation_of: Option<usize>,
 }
 
 impl From<&Entry> for EntryDto {
@@ -72,6 +78,7 @@ impl From<&Entry> for EntryDto {
                 .iter()
                 .map(|(k, v)| (k.clone(), FieldValueDto::from(v)))
                 .collect(),
+            continuation_of: entry.continuation_of,
         }
     }
 }
@@ -118,6 +125,7 @@ fn reason_key(reason: DiagnosticReason) -> &'static str {
         DiagnosticReason::NonObjectJson => "non_object_json",
         DiagnosticReason::UnparsableTimestamp => "unparsable_timestamp",
         DiagnosticReason::EncodingFallback => "encoding_fallback",
+        DiagnosticReason::ChainTruncated => "chain_truncated",
     }
 }
 
@@ -160,6 +168,7 @@ impl From<&Diagnostics> for DiagnosticsSummaryDto {
             DiagnosticReason::NonObjectJson,
             DiagnosticReason::UnparsableTimestamp,
             DiagnosticReason::EncodingFallback,
+            DiagnosticReason::ChainTruncated,
         ] {
             let count = diagnostics.count_for(reason);
             if count > 0 {

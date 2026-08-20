@@ -867,6 +867,11 @@ pub struct LeadingMatch<'a> {
     pub head: &'a str,
     /// The line after the timestamp (and its closing bracket), trimmed.
     pub rest: &'a str,
+    /// As `rest`, but with the leading whitespace left in place. The continuation
+    /// recognizers need it: an indented logcat message is one of the signals that a
+    /// re-stamped line continues the one above it (`multiline-entry-continuations`
+    /// design D3, R2), and trimming would erase exactly that evidence.
+    pub rest_raw: &'a str,
     /// klog/logcat severity letter that was part of the match (`I0808 …`, or the
     /// letter sitting after logcat's columns).
     pub level_letter: Option<u8>,
@@ -955,6 +960,7 @@ fn try_shape<'a>(
         offset,
         head: line[..head_end].trim(),
         rest: line[rest_start..].trim_start(),
+        rest_raw: &line[rest_start..],
         level_letter,
         logcat,
     })

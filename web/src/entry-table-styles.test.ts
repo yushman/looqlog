@@ -110,3 +110,33 @@ describe("the grid template is variable-driven (design D1)", () => {
     expect(cssSource).not.toContain("--col-message");
   });
 });
+
+describe("continuation chains render as groups (`entry-table` spec)", () => {
+  it("styles the group control and the member indentation in the stylesheet", () => {
+    // Same reason as the row height above: the class names are written in
+    // `looq-entry-table.ts` and styled in `style.css`, and a drift between the two
+    // is invisible — the chain still collapses, it just stops looking like a group.
+    expect(tableCode).toContain("chain-toggle");
+    expect(tableCode).toContain("chain-count");
+    expect(tableCode).toContain("chain-member");
+    expect(cssSource).toContain(".chain-toggle");
+    expect(cssSource).toContain(".chain-count");
+    expect(cssSource).toContain(".entry-row.chain-member");
+  });
+
+  it("indents members with padding on the message cell, not a margin on the row", () => {
+    // The row is a grid that has to keep lining up with the header's columns; a
+    // margin on the row would shift every column of that row against the header.
+    const rule = /\.entry-row\.chain-member \.col-message \{([^}]*)\}/s.exec(cssSource);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).toContain("padding-left");
+    expect(rule![1]).not.toContain("margin");
+  });
+
+  it("keeps every row one ROW_HEIGHT tall, so expanding cannot break the arithmetic", () => {
+    // Virtual scrolling is `index * ROW_HEIGHT` (design D6). A taller "group" row
+    // would silently misplace every row below it, which is why the group is a class
+    // on an ordinary row rather than a nested container.
+    expect(cssSource).not.toMatch(/\.entry-row\.chain-member \{[^}]*height:/s);
+  });
+});

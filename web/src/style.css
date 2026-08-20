@@ -1201,6 +1201,38 @@ looq-entry-table[hidden] {
   white-space: nowrap;
 }
 
+/* Continuation chains (`multiline-entry-continuations`, `entry-table` spec). A chain
+   root carries the disclosure control and a line count; its members are set apart by
+   indentation alone, so a sixty-frame trace reads as one event with its frames
+   underneath rather than sixty peers. The indentation is padding on the message cell,
+   not a margin on the row: the row is a grid whose columns must keep lining up with
+   the header's. */
+.chain-toggle {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin-right: 0.3em;
+  color: var(--muted);
+  font-size: 0.9em;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chain-toggle:hover,
+.chain-toggle:focus-visible {
+  color: var(--fg);
+}
+
+.chain-count {
+  color: var(--muted);
+  font-size: 0.9em;
+  font-style: italic;
+}
+
+.entry-row.chain-member .col-message {
+  padding-left: 1.5em;
+}
+
 .absent {
   color: var(--muted);
   font-style: italic;

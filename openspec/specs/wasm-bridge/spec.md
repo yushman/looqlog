@@ -3,9 +3,7 @@
 The `wasm-bridge` capability covers the typed JS↔WASM boundary, the Web Worker the
 parser runs in, chunked feeding, progress reporting, cancellation, and parser instance
 lifecycle (`browser-app-shell` change).
-
 ## Requirements
-
 ### Requirement: Parsing runs off the main thread
 The parser SHALL run inside a Web Worker reached through `comlink`, so that parsing a large
 file leaves the page able to paint and respond to input. The main thread SHALL NOT hold a
@@ -24,7 +22,9 @@ synchronous reference to the WASM module.
 Entries, the detection result, the field inventory and the diagnostics SHALL cross the
 JS↔WASM boundary as typed structures via `serde-wasm-bindgen`, and the TypeScript types
 describing them SHALL be checked by `tsc --noEmit` in CI so a shape change in Rust cannot land
-as a silent runtime mismatch.
+as a silent runtime mismatch. An entry's continuation link SHALL cross as a nullable number,
+never as `undefined`, so consumers that test for absence with an explicit null check behave
+correctly.
 
 #### Scenario: Type check catches a shape change
 - **WHEN** a field is renamed in the Rust structure without updating the TypeScript type
@@ -33,6 +33,11 @@ as a silent runtime mismatch.
 #### Scenario: Entries arrive with their fields intact
 - **WHEN** a logfmt fixture carrying `service=api` is parsed
 - **THEN** the JS side receives entries whose field map contains `service` with value `api`
+
+#### Scenario: The continuation link crosses as a number or null
+- **WHEN** a fixture containing a stack trace is parsed
+- **THEN** the JS side receives the chain root's entry with a null continuation link and
+  each member's entry with the root's ordinal as a number
 
 ### Requirement: Files are fed in chunks with progress
 The bridge SHALL read the selected file in chunks and feed them to the parser incrementally,
@@ -64,3 +69,4 @@ state, field inventory or diagnostic count carries over from a previous file.
 - **WHEN** a JSON fixture is opened and then a logfmt fixture is opened in the same page
 - **THEN** the second file is detected as logfmt and its field inventory contains nothing from
   the first
+

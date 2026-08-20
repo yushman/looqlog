@@ -15,6 +15,9 @@ pub enum DiagnosticReason {
     UnparsableTimestamp,
     /// The line was not valid UTF-8 and was decoded with the latin-1 fallback.
     EncodingFallback,
+    /// A multi-line event ran past the chain cap, so it was closed and the lines
+    /// beyond it start fresh entries (`multiline-entry-continuations` design D8).
+    ChainTruncated,
 }
 
 impl DiagnosticReason {
@@ -24,6 +27,7 @@ impl DiagnosticReason {
             DiagnosticReason::NonObjectJson => "JSON value is not an object",
             DiagnosticReason::UnparsableTimestamp => "unparsable timestamp value",
             DiagnosticReason::EncodingFallback => "decoded with latin-1 fallback",
+            DiagnosticReason::ChainTruncated => "multi-line event truncated at the chain cap",
         }
     }
 }

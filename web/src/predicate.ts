@@ -112,6 +112,35 @@ function matchesText(text: string, compiled: Exclude<CompiledQuery, { kind: "non
   return compiled.kind === "substring" ? text.toLowerCase().includes(compiled.needle) : compiled.re.test(text);
 }
 
+/** The predicate `EntryIndex` evaluates, split in two because a continuation chain
+ * is filtered and searched by different halves of it
+ * (`multiline-entry-continuations` design D9):
+ *
+ * - **`root`** — the field filters. Evaluated against the chain root only, so
+ *   `level=ERROR` shows a whole trace whose frames extracted no level of their own,
+ *   and a chain whose root does not match is hidden entirely (`filtering` spec).
+ * - **`member`** — the search query. A match on *any* member surfaces the chain, with
+ *   the root intact, so a matching frame is never shown detached from the exception it
+ *   belongs to (`search` spec).
+ *
+ * An entry that is not part of a chain — including a member orphaned by eviction — is
+ * simply tested against both halves. */
+export interface ChainAwarePredicate {
+  root(entry: EntryDto): boolean;
+  member(entry: EntryDto): boolean;
+}
+
+/** The active chips and query as the two halves above. */
+export function chainAwarePredicate(
+  fieldFilters: FieldFilters,
+  query: CompiledQuery,
+): ChainAwarePredicate {
+  return {
+    root: (entry) => matchesFieldFilters(entry, fieldFilters),
+    member: (entry) => matchesQuery(entry, query),
+  };
+}
+
 /** The full three-way test — range ∧ fields ∧ query — on one entry. `EntryIndex`
  * does not use this for its bulk range/bucket queries (it has faster range
  * machinery of its own); this is for the callers that only ever see one entry at a

@@ -20,7 +20,7 @@ import { DEFAULT_COLUMN_WIDTHS, type ColumnWidths } from "../column-widths";
 import { EntryIndex } from "../entry-index";
 import { formatBytes, HARD_CAP_BYTES, WARN_THRESHOLD_BYTES } from "../limits";
 import type { CollapsiblePane } from "../panes";
-import { knownFieldNames, matchesFieldFilters, matchesQuery, type CompiledQuery, type FieldFilters } from "../predicate";
+import { chainAwarePredicate, knownFieldNames, type CompiledQuery, type FieldFilters } from "../predicate";
 import type { TimeRange } from "../time-range";
 import { decodeHash, HashWriter, type DecodedHash } from "../url-hash";
 import type { FieldInventoryDto } from "../wasm-types";
@@ -349,7 +349,7 @@ export class LooqApp extends HTMLElement {
     }
     const hasFilters = this.fieldFilters.size > 0 || this.compiledQuery.kind !== "none";
     this.entryIndex.setPredicate(
-      hasFilters ? (e) => matchesFieldFilters(e, this.fieldFilters) && matchesQuery(e, this.compiledQuery) : null,
+      hasFilters ? chainAwarePredicate(this.fieldFilters, this.compiledQuery) : null,
     );
     this.tableEl.setQuery(this.compiledQuery);
     this.detailEl.setQuery(this.compiledQuery);

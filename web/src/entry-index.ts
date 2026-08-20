@@ -19,6 +19,7 @@
 // the core crate if profiling shows index maintenance, not rendering, dominating
 // at target dataset sizes.
 
+import type { ChainAwarePredicate } from "./predicate";
 import type { EntryDto } from "./wasm-types";
 
 interface TimestampedRef {
@@ -100,8 +101,18 @@ export class EntryIndex {
   // the one the 50ms target in `filtering-and-search`'s `filtering` spec
   // measures); a newly arriving entry is tested once against the current
   // predicate in `append`, never against the whole retained set.
-  private predicate: ((e: EntryDto) => boolean) | null = null;
+  private predicate: ChainAwarePredicate | null = null;
   private matchingOrdinals = new Set<number>();
+
+  /** Chain root ordinal → its member ordinals, in input order
+   * (`multiline-entry-continuations`). The reverse direction needs no structure of
+   * its own: `EntryDto.continuationOf` already names the root, which is exactly why
+   * the parser stores the root rather than the predecessor (design D2).
+   *
+   * A member whose root has been evicted keeps a `continuationOf` pointing at an
+   * ordinal that is no longer here. That is not an error state: it renders and filters
+   * as an ordinary standalone entry, which is what `rootOf` returning `null` means. */
+  private chainMembers = new Map<number, number[]>();
 
   /** Distinct `level` values and their live counts, maintained incrementally
    * across append/evict — chips need this (`filtering` spec, "Filter chips come
@@ -118,8 +129,19 @@ export class EntryIndex {
       if (e.level !== null) {
         this.levelCounts.set(e.level, (this.levelCounts.get(e.level) ?? 0) + 1);
       }
-      if (this.predicate !== null && this.predicate(e)) {
-        this.matchingOrdinals.add(e.ordinal);
+      // Registered before the predicate runs: a member arriving into an already-open
+      // chain can flip that chain from hidden to shown (a search matching the frame
+      // that just landed), and `chainMatches` has to be able to see it.
+      if (e.continuationOf !== null) {
+        const members = this.chainMembers.get(e.continuationOf);
+        if (members === undefined) {
+          this.chainMembers.set(e.continuationOf, [e.ordinal]);
+        } else {
+          members.push(e.ordinal);
+        }
+      }
+      if (this.predicate !== null) {
+        this.evaluateOnArrival(e);
       }
       if (e.timestamp === null) {
         this.timestamplessOrdinals.add(e.ordinal);
@@ -143,17 +165,105 @@ export class EntryIndex {
    * never the range — see the class-level comment). `null` clears filtering
    * entirely. This is D9's "expensive path": O(retained entries), paid once per
    * filter change rather than per arriving entry. */
-  setPredicate(pred: ((e: EntryDto) => boolean) | null): void {
-    this.predicate = pred;
+  setPredicate(pred: ((e: EntryDto) => boolean) | ChainAwarePredicate | null): void {
+    // A bare function stays supported and means "one rule for everything": it becomes
+    // the root half, with a member half that matches anything, so a chain is shown iff
+    // its root is.
+    this.predicate =
+      typeof pred === "function" ? { root: pred, member: () => true } : pred;
     this.matchingOrdinals.clear();
-    if (pred === null) {
+    if (this.predicate === null) {
       return;
     }
     for (const e of this.entries.values()) {
-      if (pred(e)) {
-        this.matchingOrdinals.add(e.ordinal);
+      if (this.rootOf(e) !== null) {
+        continue; // decided as part of its chain, below
+      }
+      const members = this.chainMembers.get(e.ordinal);
+      if (members === undefined || members.length === 0) {
+        if (this.predicate.root(e) && this.predicate.member(e)) {
+          this.matchingOrdinals.add(e.ordinal);
+        }
+        continue;
+      }
+      this.applyChainMatch(e.ordinal, this.chainMatches(e.ordinal));
+    }
+  }
+
+  /** The root of `entry`'s chain, or `null` when it stands on its own — which
+   * includes a member whose root has been evicted (design: an orphan is an ordinary
+   * entry, not a failed lookup). */
+  private rootOf(entry: EntryDto): number | null {
+    const root = entry.continuationOf;
+    return root !== null && this.entries.has(root) ? root : null;
+  }
+
+  /** Whether the chain rooted at `rootOrdinal` is shown: its **root** must pass the
+   * field filters, and the query must match the root or any one member (design D9). */
+  private chainMatches(rootOrdinal: number): boolean {
+    const predicate = this.predicate;
+    const root = this.entries.get(rootOrdinal);
+    if (predicate === null || root === undefined || !predicate.root(root)) {
+      return false;
+    }
+    if (predicate.member(root)) {
+      return true;
+    }
+    for (const ordinal of this.chainMembers.get(rootOrdinal) ?? []) {
+      const member = this.entries.get(ordinal);
+      if (member !== undefined && predicate.member(member)) {
+        return true;
       }
     }
+    return false;
+  }
+
+  /** Shows or hides a whole chain at once — never a member without its root, never a
+   * root with its members omitted (`filtering` spec). */
+  private applyChainMatch(rootOrdinal: number, matched: boolean): void {
+    const ordinals = [rootOrdinal, ...(this.chainMembers.get(rootOrdinal) ?? [])];
+    for (const ordinal of ordinals) {
+      if (matched) {
+        this.matchingOrdinals.add(ordinal);
+      } else {
+        this.matchingOrdinals.delete(ordinal);
+      }
+    }
+  }
+
+  /** One arriving entry against the active predicate (the cheap path — the whole
+   * retained set is only ever re-tested by `setPredicate`). */
+  private evaluateOnArrival(entry: EntryDto): void {
+    const predicate = this.predicate;
+    if (predicate === null) {
+      return;
+    }
+    const root = this.rootOf(entry);
+    if (root === null) {
+      if (predicate.root(entry) && predicate.member(entry)) {
+        this.matchingOrdinals.add(entry.ordinal);
+      }
+      return;
+    }
+    if (this.matchingOrdinals.has(root)) {
+      this.matchingOrdinals.add(entry.ordinal); // chain already shown
+    } else if (this.chainMatches(root)) {
+      this.applyChainMatch(root, true);
+    }
+  }
+
+  /** Whether `ordinal` continues a chain whose root is still retained — the test the
+   * timeline uses to count events rather than lines (`timeline` spec, design D9). An
+   * orphaned member counts as its own event, because that is how it renders. */
+  private isChainMember(ordinal: number): boolean {
+    const entry = this.entries.get(ordinal);
+    return entry !== undefined && this.rootOf(entry) !== null;
+  }
+
+  /** Member ordinals of the chain rooted at `ordinal`, in input order; empty for an
+   * entry that roots no chain. */
+  membersOf(ordinal: number): readonly number[] {
+    return this.chainMembers.get(ordinal) ?? [];
   }
 
   get hasActivePredicate(): boolean {
@@ -217,6 +327,19 @@ export class EntryIndex {
         }
       }
       this.matchingOrdinals.delete(ordinal);
+      // A root's member list goes with it; the members themselves survive as
+      // orphans and are treated as standalone from here on. A member evicted while
+      // its root is still retained leaves that root's list.
+      this.chainMembers.delete(ordinal);
+      if (entry !== undefined && entry.continuationOf !== null) {
+        const siblings = this.chainMembers.get(entry.continuationOf);
+        if (siblings !== undefined) {
+          const at = siblings.indexOf(ordinal);
+          if (at >= 0) {
+            siblings.splice(at, 1);
+          }
+        }
+      }
       this.entries.delete(ordinal);
       if (this.timestamplessOrdinals.delete(ordinal)) {
         continue;
@@ -276,7 +399,13 @@ export class EntryIndex {
     return ordinals;
   }
 
-  /** Counts per bucket of width `bucketMs`, covering `bucketCount` buckets
+  /** Counts **events**, not lines: an entry that continues the entry above it is not
+   * counted, so a sixty-frame exception is one point on the timeline rather than a
+   * spike that reads as sixty failures (`timeline` spec, design D9). The consequence
+   * is intended and visible — the timeline's total no longer equals the number of
+   * table rows.
+   *
+   * Counts per bucket of width `bucketMs`, covering `bucketCount` buckets
    * starting at `startMs`, for entries matching the active predicate (D2 — this is
    * what the table and every count use; equal to `bucketCountsUnfiltered` when no
    * predicate is set). Fast enough to call on every drag frame: one pass over the
@@ -314,6 +443,9 @@ export class EntryIndex {
       }
       if (respectPredicate && this.predicate !== null && !this.matchingOrdinals.has(ref.ordinal)) {
         continue;
+      }
+      if (this.isChainMember(ref.ordinal)) {
+        continue; // one count per event, not per physical line
       }
       let idx = Math.floor((ref.tsMs - startMs) / bucketMs);
       if (idx >= bucketCount) {

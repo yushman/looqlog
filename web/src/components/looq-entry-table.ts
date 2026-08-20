@@ -47,6 +47,22 @@ export class LooqEntryTable extends HTMLElement {
   private index: EntryIndex | null = null;
   private activeRange: TimeRange | null = null;
   private displayed: EntryDto[] = [];
+  /** `displayed` minus the members of collapsed chains — the rows virtual scrolling
+   * actually addresses (`entry-table` spec, "A continuation chain renders as one
+   * collapsible group"). Every row is still one `ROW_HEIGHT`, so the arithmetic that
+   * makes this a virtual scroller rather than a measurement pass is untouched. */
+  private rows: EntryDto[] = [];
+  /** Chain root ordinal → total lines in the chain (root included), for the roots
+   * present in `displayed`. Absent for an entry that roots no visible chain. */
+  private chainSizes = new Map<number, number>();
+  /** Member ordinal → its root, for members whose root is also in `displayed`. A
+   * member without one — a chain cut by a time range, or orphaned by live-tail
+   * eviction — renders as an ordinary standalone row. */
+  private chainOf = new Map<number, number>();
+  /** Roots the user has expanded. Chains start collapsed, so a file full of stack
+   * traces opens showing events rather than frames. Held on the component, so it
+   * survives the row recycling in `renderVisibleRows` and every `refresh()`. */
+  private expandedChains = new Set<number>();
   private selectedOrdinal: number | null = null;
   private evictionBannerVisible = false;
   /** For highlighting only (`search` spec, "Match highlighting") — filtering
@@ -358,6 +374,7 @@ export class LooqEntryTable extends HTMLElement {
   setIndex(index: EntryIndex): void {
     this.index = index;
     this.selectedOrdinal = null;
+    this.expandedChains.clear(); // a new file's ordinals mean nothing to the old set
     this.recomputeDisplayed();
     this.viewportEl.scrollTop = 0;
     this.renderVisibleRows();
@@ -378,6 +395,7 @@ export class LooqEntryTable extends HTMLElement {
    * predicate before `refreshFilters`/`refresh` is called. */
   setQuery(compiled: CompiledQuery): void {
     this.compiledQuery = compiled;
+    this.expandChainsMatchingQuery();
     this.renderVisibleRows();
   }
 
@@ -400,18 +418,18 @@ export class LooqEntryTable extends HTMLElement {
     if (!this.index) {
       return;
     }
-    const oldDisplayed = this.displayed;
+    const oldRows = this.rows;
     const scrollTop = this.viewportEl.scrollTop;
     const topIdx = Math.floor(scrollTop / ROW_HEIGHT);
-    const anchor = oldDisplayed[topIdx];
+    const anchor = oldRows[topIdx];
     const anchorOffsetPx = scrollTop - topIdx * ROW_HEIGHT;
 
     this.recomputeDisplayed();
 
     if (anchor) {
-      const newIdx = lowerBoundOrdinal(this.displayed, anchor.ordinal);
-      const found = this.displayed[newIdx]?.ordinal === anchor.ordinal;
-      if (!found && this.displayed.length > 0 && (this.displayed[0]?.ordinal ?? 0) > anchor.ordinal) {
+      const newIdx = lowerBoundOrdinal(this.rows, anchor.ordinal);
+      const found = this.rows[newIdx]?.ordinal === anchor.ordinal;
+      if (!found && this.rows.length > 0 && (this.rows[0]?.ordinal ?? 0) > anchor.ordinal) {
         // The row the user was anchored to (or rows above it) were evicted out
         // from under them — jumping to the nearest survivor is the "adjusts
         // cleanly" half of the requirement; the banner is the "indicates lost
@@ -419,7 +437,7 @@ export class LooqEntryTable extends HTMLElement {
         this.evictionBannerVisible = true;
         this.evictionEl.hidden = false;
       }
-      const clampedIdx = Math.min(newIdx, Math.max(0, this.displayed.length - 1));
+      const clampedIdx = Math.min(newIdx, Math.max(0, this.rows.length - 1));
       this.viewportEl.scrollTop = clampedIdx * ROW_HEIGHT + (found ? anchorOffsetPx : 0);
     }
 
@@ -455,7 +473,33 @@ export class LooqEntryTable extends HTMLElement {
     } else {
       this.displayed = this.index.entriesInInputOrder();
     }
+    this.recomputeRows();
     this.renderSummary();
+  }
+
+  /** Groups `displayed` into chains and drops the members of collapsed ones. Derived
+   * from `displayed` rather than from the index on purpose: a member whose root the
+   * active range or eviction removed is then, by construction, a row with no group —
+   * there is no lookup left to fail. */
+  private recomputeRows(): void {
+    this.chainSizes.clear();
+    this.chainOf.clear();
+    const present = new Set(this.displayed.map((e) => e.ordinal));
+    for (const entry of this.displayed) {
+      const root = entry.continuationOf;
+      if (root === null || !present.has(root)) {
+        continue;
+      }
+      this.chainOf.set(entry.ordinal, root);
+      this.chainSizes.set(root, (this.chainSizes.get(root) ?? 1) + 1);
+    }
+    // Expansion state is kept for chains that are no longer visible: a filter change
+    // that hides a chain and a later one that brings it back should not silently
+    // re-collapse it.
+    this.rows = this.displayed.filter((entry) => {
+      const root = this.chainOf.get(entry.ordinal);
+      return root === undefined || this.expandedChains.has(root);
+    });
   }
 
   private renderSummary(): void {
@@ -493,7 +537,7 @@ export class LooqEntryTable extends HTMLElement {
   }
 
   private renderVisibleRows(): void {
-    const total = this.displayed.length;
+    const total = this.rows.length;
     const clientHeight = this.viewportEl.clientHeight || ROW_HEIGHT * 20;
     const scrollTop = this.viewportEl.scrollTop;
     const firstIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS);
@@ -523,21 +567,33 @@ export class LooqEntryTable extends HTMLElement {
     }
     const queryKey = compiledQueryKey(this.compiledQuery);
     for (let j = 0; j < count; j++) {
-      const entry = this.displayed[firstIdx + j]!; // firstIdx + j < lastIdxExclusive <= total
+      const entry = this.rows[firstIdx + j]!; // firstIdx + j < lastIdxExclusive <= total
       const el = this.rowsEl.children[j] as HTMLElement;
       const selected = entry.ordinal === this.selectedOrdinal;
-      const key = `${entry.ordinal}|${selected ? 1 : 0}|${queryKey}`;
+      const chainSize = this.chainSizes.get(entry.ordinal) ?? 0;
+      const expanded = chainSize > 0 && this.expandedChains.has(entry.ordinal);
+      const isMember = this.chainOf.has(entry.ordinal);
+      const key = `${entry.ordinal}|${selected ? 1 : 0}|${queryKey}|${chainSize}|${expanded ? 1 : 0}|${isMember ? 1 : 0}`;
       if (el.dataset.key === key) {
         continue;
       }
       el.dataset.key = key;
       el.dataset.ordinal = String(entry.ordinal);
       el.classList.toggle("selected", selected);
-      el.innerHTML = renderRowCellsHtml(entry, this.compiledQuery);
+      el.classList.toggle("chain-member", isMember);
+      el.innerHTML = renderRowCellsHtml(entry, this.compiledQuery, chainSize, expanded);
     }
   }
 
   private handleRowClick(event: Event): void {
+    // The group control comes first: clicking it expands the chain, it does not
+    // select the row underneath it.
+    const toggle = (event.target as HTMLElement).closest<HTMLElement>(".chain-toggle");
+    if (toggle) {
+      event.stopPropagation();
+      this.toggleChain(Number(toggle.dataset.chain));
+      return;
+    }
     const rowEl = (event.target as HTMLElement).closest<HTMLElement>("[data-ordinal]");
     if (!rowEl) {
       return;
@@ -546,6 +602,46 @@ export class LooqEntryTable extends HTMLElement {
     this.selectedOrdinal = this.selectedOrdinal === ordinal ? null : ordinal;
     this.renderVisibleRows(); // to toggle the `.selected` class
     this.emitSelection();
+  }
+
+  /** Expands or collapses the chain rooted at `rootOrdinal`, keeping the scroll
+   * anchored on that root: the rows below it move, and a user who opened a
+   * sixty-frame trace should still be looking at its first line. */
+  private toggleChain(rootOrdinal: number): void {
+    if (!this.chainSizes.has(rootOrdinal)) {
+      return;
+    }
+    if (this.expandedChains.has(rootOrdinal)) {
+      this.expandedChains.delete(rootOrdinal);
+    } else {
+      this.expandedChains.add(rootOrdinal);
+    }
+    const offsetPx = this.viewportEl.scrollTop - this.rows.findIndex((e) => e.ordinal === rootOrdinal) * ROW_HEIGHT;
+    this.recomputeRows();
+    const at = this.rows.findIndex((e) => e.ordinal === rootOrdinal);
+    if (at >= 0) {
+      this.viewportEl.scrollTop = Math.max(0, at * ROW_HEIGHT + offsetPx);
+    }
+    this.renderVisibleRows();
+  }
+
+  /** Expands every visible chain with a member the query matched, so the highlighted
+   * frame is actually on screen (`entry-table` spec, "Search expands the chain it
+   * matched"). Collapsing again is the user's call — this never re-collapses. */
+  private expandChainsMatchingQuery(): void {
+    if (this.compiledQuery.kind === "none") {
+      return;
+    }
+    for (const entry of this.displayed) {
+      const root = this.chainOf.get(entry.ordinal);
+      if (root === undefined || this.expandedChains.has(root)) {
+        continue;
+      }
+      if (findMatchRanges(entry.message, this.compiledQuery).length > 0) {
+        this.expandedChains.add(root);
+      }
+    }
+    this.recomputeRows();
   }
 }
 
@@ -638,7 +734,12 @@ function compiledQueryKey(compiled: CompiledQuery): string {
   }
 }
 
-function renderRowCellsHtml(entry: EntryDto, compiled: CompiledQuery): string {
+function renderRowCellsHtml(
+  entry: EntryDto,
+  compiled: CompiledQuery,
+  chainSize: number,
+  expanded: boolean,
+): string {
   const timestampHtml = entry.timestamp
     ? `<span title="${escapeHtml(entry.timestamp)}">${escapeHtml(rowTimestamp(entry.timestamp))}</span>`
     // An em dash, not the words "no timestamp": the marker has to fit a column
@@ -661,11 +762,34 @@ function renderRowCellsHtml(entry: EntryDto, compiled: CompiledQuery): string {
   // Highlighting runs on the truncated text (`search` spec: "within the
   // truncated visible text") so ranges line up with what's actually rendered.
   const messageHtml = highlightHtml(messageShown, compiled);
+  // A chain root carries the control and the line count; a member carries neither and
+  // is set apart by the row's `chain-member` class alone (`entry-table` spec).
+  const toggleHtml = chainSize > 0 ? chainToggleHtml(entry.ordinal, chainSize, expanded) : "";
+  const countHtml =
+    chainSize > 0
+      ? ` <span class="chain-count">${chainSize} lines</span>`
+      : "";
+  // The control lives at the head of the message cell, not in the ordinal cell: the
+  // ordinal column is sized for its digits, and a control wedged in beside them
+  // truncates the line number on exactly the rows a user is most likely to want it.
   return `
         <span class="col-ordinal">${entry.ordinal}</span>
         <span class="col-timestamp">${timestampHtml}</span>
         <span class="col-level">${levelHtml}</span>
-        <span class="col-message" title="${truncated ? "truncated — click the row for the full message" : ""}">${messageHtml}</span>`;
+        <span class="col-message" title="${truncated ? "truncated — click the row for the full message" : ""}">${toggleHtml}${messageHtml}${countHtml}</span>`;
+}
+
+/** The expand/collapse control on a chain root. A real `<button>`, so it is reachable
+ * by keyboard and announces its state, and `aria-expanded` is what carries that state
+ * rather than the glyph. */
+function chainToggleHtml(rootOrdinal: number, chainSize: number, expanded: boolean): string {
+  const label = expanded
+    ? `Collapse this ${chainSize}-line event`
+    : `Expand this ${chainSize}-line event`;
+  return (
+    `<button type="button" class="chain-toggle" data-chain="${rootOrdinal}" ` +
+    `aria-expanded="${expanded}" aria-label="${label}" title="${label}">${expanded ? "▾" : "▸"}</button>`
+  );
 }
 
 /** First index in `displayed` (sorted ascending by ordinal — input order, D2)

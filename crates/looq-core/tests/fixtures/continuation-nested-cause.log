@@ -1,0 +1,8 @@
+2026-08-08T17:42:11Z ERROR unhandled exception in request handler
+java.lang.IllegalStateException: connection pool is closed
+	at com.example.app.Pool.borrow(Pool.java:88)
+	at com.example.app.Handler.process(Handler.java:42)
+Caused by: java.io.IOException: broken pipe
+	at java.base/sun.nio.ch.SocketDispatcher.write0(Native Method)
+	... 14 more
+2026-08-08T17:42:12Z INFO request completed

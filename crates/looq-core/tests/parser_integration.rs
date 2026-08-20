@@ -10,7 +10,7 @@ use looq_core::diagnostics::DiagnosticReason;
 use looq_core::entry::{Entry, FieldValue};
 use looq_core::format::Format;
 use looq_core::level::Level;
-use looq_core::parser::Parser;
+use looq_core::parser::{Parser, MAX_CHAIN_LINES};
 use looq_core::timestamp::{ParseContext, TimeZonePolicy};
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -169,6 +169,15 @@ fn stack_trace_becomes_one_entry_per_line_no_diagnostics() {
     entries.extend(parser.finish());
     assert_eq!(entries.len(), 5);
     assert_eq!(parser.diagnostics().total(), 0);
+    // Still one entry per physical line — nothing is merged
+    // (`multiline-entry-continuations` D1). What is new is the link: the exception
+    // header and the three frames all name the timestamped line as their chain root,
+    // not their immediate predecessor (D2).
+    assert_eq!(entries[0].continuation_of, None);
+    assert_eq!(
+        links(&entries),
+        vec![None, Some(1), Some(1), Some(1), Some(1)]
+    );
 }
 
 #[test]
@@ -818,4 +827,335 @@ fn field_value_map_type_check() {
     // Compile-time sanity: Entry.fields is a BTreeMap<String, FieldValue>.
     let map: BTreeMap<String, FieldValue> = BTreeMap::new();
     assert!(map.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Multi-line events (`multiline-entry-continuations`, `entry-continuations` spec).
+//
+// One entry per physical line is preserved throughout; what these assert is the
+// link — and, just as important, its absence on the 134,960 lines of unprefixed
+// dump text the measured bugreport contains.
+// ---------------------------------------------------------------------------
+
+/// The continuation link of each entry, in input order — the shape every assertion
+/// below is written against.
+fn links(entries: &[Entry]) -> Vec<Option<usize>> {
+    entries.iter().map(|e| e.continuation_of).collect()
+}
+
+fn parse_plain(data: &[u8]) -> (Vec<Entry>, Parser) {
+    let mut parser = Parser::with_context(Some(Format::Plain), plain_context());
+    let mut entries = parser.feed(data);
+    entries.extend(parser.finish());
+    (entries, parser)
+}
+
+#[test]
+fn python_traceback_links_its_frames_and_its_body_lines() {
+    let (entries, parser) = parse_plain(&fixture("continuation-python.log"));
+    assert_eq!(entries.len(), 6);
+    assert_eq!(parser.diagnostics().total(), 0);
+    // `Traceback…`, the `File "…", line N` frame, that frame's own source line, and
+    // the trailing `ValueError:` header all belong to the timestamped root.
+    assert_eq!(
+        links(&entries),
+        vec![None, Some(1), Some(1), Some(1), Some(1), None]
+    );
+    // Marking, not merging: the root's message is exactly what it was.
+    assert_eq!(entries[0].message, "request handler failed");
+    assert_eq!(entries[5].message, "request completed");
+}
+
+#[test]
+fn nested_cause_links_every_frame_to_the_root_not_to_the_caused_by() {
+    let (entries, parser) = parse_plain(&fixture("continuation-nested-cause.log"));
+    assert_eq!(entries.len(), 8);
+    assert_eq!(parser.diagnostics().total(), 0);
+    // Design D2: `Caused by:` is a member like any other, so the frames beneath it
+    // point past it at ordinal 1 rather than at line 5.
+    assert_eq!(
+        links(&entries),
+        vec![
+            None,
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+            None
+        ]
+    );
+}
+
+#[test]
+fn logcat_frames_chain_on_identity_even_when_the_millisecond_drifts() {
+    let (entries, parser) = parse_plain(&fixture("continuation-logcat.log"));
+    assert_eq!(entries.len(), 9);
+    assert_eq!(parser.diagnostics().total(), 0);
+    // Two independent chains: the `JAZZ/WebSocketClientImpl` trace, then the
+    // `System.err` one, which starts a fresh root because its identity differs.
+    assert_eq!(
+        links(&entries),
+        vec![
+            None,
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+            None,
+            Some(6),
+            Some(6),
+            Some(6)
+        ]
+    );
+    // Design D4: the root is stamped `.983` and its first frame `.984`. Identity is
+    // `(pid, tid, level, tag)` precisely so a trace long enough to cross a
+    // millisecond boundary is not the one chain that breaks.
+    assert_ne!(entries[5].timestamp, entries[6].timestamp);
+    // A member keeps its own extracted values; the link copies nothing from the root
+    // (`field-extraction` spec, "A continuation entry keeps its own extracted values").
+    assert_eq!(entries[6].level, Some(Level::Warn));
+    assert_eq!(
+        entries[6].fields.get("tag"),
+        Some(&FieldValue::String("System.err".to_string()))
+    );
+}
+
+#[test]
+fn consecutive_logcat_lines_with_the_same_identity_do_not_chain() {
+    let (entries, parser) = parse_plain(&fixture("continuation-logcat-noise.log"));
+    assert_eq!(entries.len(), 8);
+    assert_eq!(parser.diagnostics().total(), 0);
+    // The 946-line `NetworkSensitiveLogger: *` run of the measured corpus: identity
+    // establishes candidacy, the message establishes continuation (design D4), and
+    // an unindented `*` carries no continuation signal at all.
+    assert!(entries.iter().all(|e| e.continuation_of.is_none()));
+}
+
+#[test]
+fn multiline_json_payload_is_grouped_but_not_field_extracted() {
+    let (entries, parser) = parse_plain(&fixture("continuation-json-payload.log"));
+    assert_eq!(entries.len(), 15);
+    assert_eq!(parser.diagnostics().total(), 0);
+    // Fourteen lines from `response body = {` through the `}` that closes it; the
+    // line after the closing brace starts a new entry (design D5).
+    let mut expected = vec![Some(1); 15];
+    expected[0] = None;
+    expected[14] = None;
+    assert_eq!(links(&entries), expected);
+    // Design D7, stated plainly rather than discovered later: the payload is grouped,
+    // never field-extracted. `dispatch_payload` is untouched, so no key from any
+    // continuation line became a field on the root or anywhere else.
+    for entry in &entries {
+        for gone in [
+            "config",
+            "common",
+            "applicationConfigs",
+            "updates",
+            "crc32",
+            "packageId",
+        ] {
+            assert!(!entry.fields.contains_key(gone), "{gone} became a field");
+        }
+    }
+    assert_eq!(entries[0].message, "response body = {");
+}
+
+#[test]
+fn unprefixed_dump_text_produces_no_links_at_all() {
+    let (entries, parser) = parse_plain(&fixture("continuation-dump-text.log"));
+    assert_eq!(entries.len(), 20);
+    assert_eq!(parser.diagnostics().total(), 0);
+    // The root-must-have-a-prefix guard, doing the whole job on its own: those bare
+    // `at …` lines follow `| held mutexes=` and `native: #03 pc …`, none of which
+    // carry a timestamp, so no chain is ever open above them (design D3).
+    assert!(entries.iter().all(|e| e.continuation_of.is_none()));
+}
+
+#[test]
+fn a_blank_line_closes_an_open_chain() {
+    let input = concat!(
+        "2026-08-08T17:42:11Z ERROR unhandled exception\n",
+        "\tat com.example.app.A.a(A.java:1)\n",
+        "\n",
+        "\tat com.example.app.B.b(B.java:2)\n",
+    );
+    let (entries, parser) = parse_plain(input.as_bytes());
+    assert_eq!(entries.len(), 3);
+    assert_eq!(parser.blank_lines(), 1);
+    assert_eq!(links(&entries), vec![None, Some(1), None]);
+    // Accounting is untouched: a continuation line still emits an entry, and a blank
+    // line is still a blank line.
+    assert_eq!(entries.len() + parser.blank_lines(), parser.total_lines());
+}
+
+/// A chain of `frames` continuation lines under one timestamped root.
+fn chain_input(frames: usize) -> String {
+    let mut input = String::from("2026-08-08T17:42:11Z ERROR unhandled exception\n");
+    for i in 0..frames {
+        input.push_str(&format!(
+            "\tat com.example.app.Frame.at{i}(Frame.java:{i})\n"
+        ));
+    }
+    input
+}
+
+#[test]
+fn a_chain_at_exactly_the_cap_is_linked_and_not_reported() {
+    let (entries, parser) = parse_plain(chain_input(MAX_CHAIN_LINES).as_bytes());
+    assert_eq!(entries.len(), MAX_CHAIN_LINES + 1);
+    assert_eq!(
+        parser
+            .diagnostics()
+            .count_for(DiagnosticReason::ChainTruncated),
+        0
+    );
+    assert!(entries[1..].iter().all(|e| e.continuation_of == Some(1)));
+}
+
+#[test]
+fn a_chain_past_the_cap_is_closed_and_the_truncation_is_reported() {
+    let (entries, parser) = parse_plain(chain_input(MAX_CHAIN_LINES + 3).as_bytes());
+    assert_eq!(entries.len(), MAX_CHAIN_LINES + 4);
+    // Design D8: the overflow lines are unlinked, and the truncation is loud. A chain
+    // that quietly stops is indistinguishable from a trace that was genuinely short.
+    assert!(entries[1..=MAX_CHAIN_LINES]
+        .iter()
+        .all(|e| e.continuation_of == Some(1)));
+    assert!(entries[MAX_CHAIN_LINES + 1..]
+        .iter()
+        .all(|e| e.continuation_of.is_none()));
+    assert_eq!(
+        parser
+            .diagnostics()
+            .count_for(DiagnosticReason::ChainTruncated),
+        1
+    );
+    let diag = parser
+        .diagnostics()
+        .retained()
+        .iter()
+        .find(|d| d.reason == DiagnosticReason::ChainTruncated)
+        .expect("the truncation is retained, not only counted");
+    assert_eq!(diag.line, MAX_CHAIN_LINES + 2);
+    // The root's line number is what the message names — that is the entry the user
+    // has to go look at.
+    assert!(diag.detail.contains("line 1"), "detail: {}", diag.detail);
+}
+
+#[test]
+fn a_truncated_json_record_is_reported_and_does_not_absorb_the_next() {
+    let input = concat!(
+        "{\"ts\":\"2026-08-08T17:42:01Z\",\"msg\":\"first\"}\n",
+        "{\"ts\":\"2026-08-08T17:42:02Z\",\"msg\":\"cut off\n",
+        "{\"ts\":\"2026-08-08T17:42:03Z\",\"msg\":\"third\"}\n",
+    );
+    let mut parser = Parser::with_context(Some(Format::Json), plain_context());
+    let mut entries = parser.feed(input.as_bytes());
+    entries.extend(parser.finish());
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        parser
+            .diagnostics()
+            .count_for(DiagnosticReason::InvalidJson),
+        1
+    );
+    // Design D6: nothing chains under a structured format, so the cut-off line is
+    // reported malformed rather than swallowing the record after it.
+    assert!(entries.iter().all(|e| e.continuation_of.is_none()));
+    assert_eq!(entries[1].message, "third");
+}
+
+#[test]
+fn the_active_format_decides_whether_lines_chain_not_the_content() {
+    // A JSON Lines stream with a raw stack trace dumped into the middle of it.
+    let input = concat!(
+        "{\"ts\":\"2026-08-08T17:42:01Z\",\"level\":\"error\",\"msg\":\"unhandled\"}\n",
+        "2026-08-08T17:42:01Z ERROR java.lang.NullPointerException: boom\n",
+        "\tat com.example.app.Handler.process(Handler.java:42)\n",
+        "{\"ts\":\"2026-08-08T17:42:02Z\",\"level\":\"info\",\"msg\":\"recovered\"}\n",
+    );
+    let mut json = Parser::with_context(Some(Format::Json), plain_context());
+    let mut json_entries = json.feed(input.as_bytes());
+    json_entries.extend(json.finish());
+    assert_eq!(json_entries.len(), 2);
+    assert_eq!(
+        json.diagnostics().count_for(DiagnosticReason::InvalidJson),
+        2
+    );
+    assert!(json_entries.iter().all(|e| e.continuation_of.is_none()));
+
+    // Same bytes, plain text forced: the frame now continues the line above it.
+    let (plain_entries, plain) = parse_plain(input.as_bytes());
+    assert_eq!(plain_entries.len(), 4);
+    assert_eq!(plain.diagnostics().total(), 0);
+    assert_eq!(links(&plain_entries), vec![None, None, Some(2), None]);
+}
+
+#[test]
+fn line_at_a_time_feeding_produces_identical_entries_and_links() {
+    for name in [
+        "stack-trace.log",
+        "continuation-python.log",
+        "continuation-nested-cause.log",
+        "continuation-logcat.log",
+        "continuation-json-payload.log",
+    ] {
+        let data = fixture(name);
+        let (whole, _) = parse_plain(&data);
+
+        let mut parser = Parser::with_context(Some(Format::Plain), plain_context());
+        let mut incremental = Vec::new();
+        for line in data.split_inclusive(|b| *b == b'\n') {
+            let produced = parser.feed(line);
+            // Design D1: no entry is withheld pending a line that has not arrived —
+            // no flush, no timeout, no end-of-input signal.
+            assert_eq!(produced.len(), 1, "{name}: a line was withheld");
+            incremental.extend(produced);
+        }
+        incremental.extend(parser.finish());
+        assert_eq!(whole, incremental, "{name}");
+    }
+}
+
+#[test]
+fn an_ansi_escape_in_a_message_opens_no_chain() {
+    // `vhdnativeservice` pipes `top` output through logcat, so `ESC[7m` and `ESC[1m`
+    // land mid-message. Counting `[` as an opening bracket turned 237 measured lines
+    // into 557 (design D5); only `{` and `}` are counted.
+    let input = concat!(
+        "04-21 12:57:16.290  root   511   614 D vhdnativeservice: \u{1b}[7m  PID USER \u{1b}[0m\n",
+        "04-21 12:57:16.291  root   511   614 D vhdnativeservice: 806 system\n",
+        "  at com.example.app.Handler.process(Handler.java:42)\n",
+    );
+    let (entries, _) = parse_plain(input.as_bytes());
+    assert_eq!(entries.len(), 3);
+    assert_eq!(links(&entries), vec![None, None, Some(2)]);
+}
+
+#[test]
+fn only_positive_evidence_links_a_line_to_the_one_above_it() {
+    let input = concat!(
+        "2026-08-08T17:42:11Z ERROR unhandled exception\n",
+        "the request could not be completed and was abandoned\n",
+        "2026-08-08T17:42:12Z ERROR unhandled exception\n",
+        "  retrying with the secondary endpoint instead\n",
+    );
+    let (entries, _) = parse_plain(input.as_bytes());
+    // Neither prose line matches a marker, and one of them is indented — "indented"
+    // alone fires on 92,151 lines of the measured corpus, so it is not evidence
+    // (design D3).
+    assert_eq!(links(&entries), vec![None, None, None, None]);
+}
+
+#[test]
+fn a_different_logcat_tag_breaks_the_chain() {
+    let input = concat!(
+        "04-21 13:07:51.983  1000   806 29149 W System.err: java.lang.IndexOutOfBoundsException\n",
+        "04-21 13:07:51.984  1000   806 29149 W System.err: \tat com.android.server.usb.UsbService.dump(UsbService.java:824)\n",
+        "04-21 13:07:51.985  1000   806 29149 W OtherTag: \tat com.android.server.usb.UsbService.dump(UsbService.java:824)\n",
+    );
+    let (entries, _) = parse_plain(input.as_bytes());
+    assert_eq!(links(&entries), vec![None, Some(1), None]);
 }

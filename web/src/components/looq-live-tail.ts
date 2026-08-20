@@ -26,7 +26,7 @@ import "./looq-workspace";
 import { DEFAULT_COLUMN_WIDTHS, type ColumnWidths } from "../column-widths";
 import { LiveTailSession, type ConnectionState } from "../live-tail";
 import type { CollapsiblePane } from "../panes";
-import { matchesFieldFilters, matchesQuery, type CompiledQuery, type FieldFilters } from "../predicate";
+import { chainAwarePredicate, type CompiledQuery, type FieldFilters } from "../predicate";
 import type { TimeRange } from "../time-range";
 import { readAuthToken } from "../token";
 import { HashWriter } from "../url-hash";
@@ -257,7 +257,7 @@ export class LooqLiveTail extends HTMLElement {
     const index = this.session.getIndex();
     const hasFilters = this.fieldFilters.size > 0 || this.compiledQuery.kind !== "none";
     index.setPredicate(
-      hasFilters ? (e) => matchesFieldFilters(e, this.fieldFilters) && matchesQuery(e, this.compiledQuery) : null,
+      hasFilters ? chainAwarePredicate(this.fieldFilters, this.compiledQuery) : null,
     );
     this.tableEl.setQuery(this.compiledQuery);
     this.detailEl.setQuery(this.compiledQuery);
