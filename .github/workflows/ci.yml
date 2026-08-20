@@ -43,9 +43,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release
-      - run: cargo package --list -p looq
+      - run: cargo package --list -p looqlog
 
-  # ADR-0005: looq-core must stay usable by a future native (MCP) adapter as well
+  # ADR-0005: looqlog-core must stay usable by a future native (MCP) adapter as well
   # as the wasm adapter, so it must never depend on wasm-bindgen/web-sys, and must
   # never touch the filesystem itself (log-parsing-core task 2.4).
   adr-0005-boundary:
@@ -53,20 +53,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: looq-core must not depend on wasm-bindgen or web-sys
+      - name: looqlog-core must not depend on wasm-bindgen or web-sys
         run: |
-          if cargo tree -p looq-core -i wasm-bindgen 2>/dev/null; then
-            echo "::error::looq-core depends on wasm-bindgen, violating ADR-0005"
+          if cargo tree -p looqlog-core -i wasm-bindgen 2>/dev/null; then
+            echo "::error::looqlog-core depends on wasm-bindgen, violating ADR-0005"
             exit 1
           fi
-          if cargo tree -p looq-core -i web-sys 2>/dev/null; then
-            echo "::error::looq-core depends on web-sys, violating ADR-0005"
+          if cargo tree -p looqlog-core -i web-sys 2>/dev/null; then
+            echo "::error::looqlog-core depends on web-sys, violating ADR-0005"
             exit 1
           fi
-      - name: looq-core's library source must not touch std::fs
+      - name: looqlog-core's library source must not touch std::fs
         run: |
-          if grep -rn "std::fs::" crates/looq-core/src/; then
-            echo "::error::crates/looq-core/src/ touches std::fs, violating ADR-0005"
+          if grep -rn "std::fs::" crates/looqlog-core/src/; then
+            echo "::error::crates/looqlog-core/src/ touches std::fs, violating ADR-0005"
             exit 1
           fi
 
@@ -114,14 +114,14 @@ jobs:
             echo "$out" | tail -25 | while IFS= read -r l; do echo "::error::$l"; done
           fi
           exit $code
-      - name: Fail if crates/looq/assets/ drifted from source
+      - name: Fail if crates/looqlog/assets/ drifted from source
         run: |
-          if ! git diff --quiet -- crates/looq/assets/; then
-            echo "::error::crates/looq/assets/ is stale — committed frontend artifacts do not match a fresh build."
+          if ! git diff --quiet -- crates/looqlog/assets/; then
+            echo "::error::crates/looqlog/assets/ is stale — committed frontend artifacts do not match a fresh build."
             echo "Run ./scripts/build-frontend.sh and commit the result."
-            git diff --stat -- crates/looq/assets/
-            git diff --stat -- crates/looq/assets/ | while IFS= read -r l; do echo "::error::drift: $l"; done
-            for f in $(git diff --name-only -- crates/looq/assets/); do
+            git diff --stat -- crates/looqlog/assets/
+            git diff --stat -- crates/looqlog/assets/ | while IFS= read -r l; do echo "::error::drift: $l"; done
+            for f in $(git diff --name-only -- crates/looqlog/assets/); do
               echo "::error::size now $(wc -c < "$f") vs committed $(git show HEAD:"$f" | wc -c) — $f"
               git show HEAD:"$f" > /tmp/committed.bin
               n=$(cmp -l /tmp/committed.bin "$f" 2>/dev/null | wc -l | tr -d ' ')

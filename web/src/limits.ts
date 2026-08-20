@@ -10,7 +10,7 @@
 // `entries: EntryDto[]` array plus `EntryIndex` this app keeps as its working set.
 // Note this is a *JS-heap* measurement, not wasm32 linear memory: the WASM side
 // stays roughly constant regardless of file size, because its own retained state
-// (diagnostics, field inventory) is capped by `looq-core`'s
+// (diagnostics, field inventory) is capped by `looqlog-core`'s
 // `DEFAULT_DIAGNOSTIC_CAP`/`DEFAULT_FIELD_VALUE_CAP` — see `log-parsing-core`'s
 // devlog entry — not because wasm32's address space itself is the binding
 // constraint here. Parse time scaled linearly too, ~80ms/MB at these sizes (well

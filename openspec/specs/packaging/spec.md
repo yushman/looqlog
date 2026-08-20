@@ -4,7 +4,7 @@ The `packaging` capability covers how the frontend artifacts get into the binary
 into a published crate that builds without a JavaScript toolchain (ADR-0008).
 ## Requirements
 ### Requirement: Building the binary requires no JavaScript toolchain
-`cargo build` and `cargo install looq` SHALL succeed on a machine with only a Rust
+`cargo build` and `cargo install looqlog` SHALL succeed on a machine with only a Rust
 toolchain — no Node.js, no npm, no `wasm-pack`, no network access beyond crates.io. The
 compiled frontend artifacts SHALL therefore be committed to the repository and included in
 the published crate (ADR-0008).
@@ -37,8 +37,8 @@ The published crate SHALL contain the built artifacts and the Rust sources, and 
 require `node_modules` or frontend sources to be present at build time.
 
 #### Scenario: Install from crates.io
-- **WHEN** `cargo install looq` runs against the published crate on a clean machine
-- **THEN** the install succeeds and `looq --version` runs
+- **WHEN** `cargo install looqlog` runs against the published crate on a clean machine
+- **THEN** the install succeeds and `looqlog --version` runs
 
 ### Requirement: Release build with a recorded size
 The project SHALL produce a release binary for every target in the declared target set, and each

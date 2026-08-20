@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-tests a freshly built `looq` release binary on the machine that just built
+# Smoke-tests a freshly built `looqlog` release binary on the machine that just built
 # it — a machine with no development environment for this project (`packaging`
 # spec, "Verification from a binary that never saw the dev machine"; design D3).
 # Runs under `bash` on Linux, macOS and Git Bash (Windows).
@@ -7,9 +7,9 @@
 # Usage: scripts/smoke-release-binary.sh <path-to-binary> <expected-version>
 #
 # NOTE ON MODE: this script never exercises file mode. `mode_for` in
-# crates/looq/src/cli.rs selects stdin mode whenever stdin is not a TTY, and on a
+# crates/looqlog/src/cli.rs selects stdin mode whenever stdin is not a TTY, and on a
 # CI runner stdin is never a TTY — `< /dev/null` does not make it one. So
-# `looq some.log` on a runner picks stdin mode regardless of the path argument
+# `looqlog some.log` on a runner picks stdin mode regardless of the path argument
 # (design D3). File mode is client-side by construction (ADR-0002/ADR-0007): the
 # backend's entire file-mode duty is printing a hint string, and it never reads the
 # file — a pty would add coverage of that hint string, not of parsing. So this
@@ -25,7 +25,7 @@ EXPECTED_VERSION="${2:?usage: smoke-release-binary.sh <binary> <expected-version
 # stdout.
 PORT=47891
 BASE_URL="http://127.0.0.1:${PORT}"
-SMOKE_LINE="looq-smoke-test-line-$$"
+SMOKE_LINE="looqlog-smoke-test-line-$$"
 
 PY="python3"
 command -v python3 >/dev/null 2>&1 || PY="python"
@@ -51,7 +51,7 @@ trap cleanup EXIT
 echo "== --version =="
 ACTUAL_VERSION_LINE="$("$BIN" --version)" ||
     fail "--version exits 0" "a clean exit" "$BIN --version failed to run"
-EXPECTED_VERSION_LINE="looq ${EXPECTED_VERSION}"
+EXPECTED_VERSION_LINE="looqlog ${EXPECTED_VERSION}"
 [ "$ACTUAL_VERSION_LINE" = "$EXPECTED_VERSION_LINE" ] ||
     fail "--version output" "$EXPECTED_VERSION_LINE" "$ACTUAL_VERSION_LINE"
 echo "ok: $ACTUAL_VERSION_LINE"

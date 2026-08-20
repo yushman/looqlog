@@ -163,14 +163,14 @@ body {
   flex-direction: column;
 }
 
-looq-app {
+looqlog-app {
   display: block;
   flex: 1 1 auto;
   min-height: 0;
 }
 
-looq-live-tail,
-looq-workspace {
+looqlog-live-tail,
+looqlog-workspace {
   display: block;
   height: 100%;
   min-height: 0;
@@ -431,7 +431,7 @@ looq-workspace {
    The width in the media query below is the ONLY definition of it in the codebase
    (collapsible-workspace-panes design D5): the media query publishes it as
    `--narrow-layout`, and `isNarrowLayout()` in
-   web/src/components/looq-workspace.ts reads that property instead of repeating
+   web/src/components/looqlog-workspace.ts reads that property instead of repeating
    the number — which is what makes the rail's sections start collapsed at exactly
    the same breakpoint the layout stacks at. Change it here and both follow. */
 :root {
@@ -652,14 +652,14 @@ code {
   padding: 0.2em 0.7em;
 }
 
-looq-detection .detection.warning,
-looq-detection.fallback,
-looq-detection.low-confidence {
+looqlog-detection .detection.warning,
+looqlog-detection.fallback,
+looqlog-detection.low-confidence {
   color: var(--warn);
   font-weight: bold;
 }
 
-looq-diagnostics .diagnostics.warning {
+looqlog-diagnostics .diagnostics.warning {
   color: var(--error);
   font-weight: bold;
 }
@@ -724,7 +724,7 @@ looq-diagnostics .diagnostics.warning {
   color: var(--warn);
 }
 
-/* ---- left rail (looq-filter-bar + the secondary surfaces) ------------------- */
+/* ---- left rail (looqlog-filter-bar + the secondary surfaces) ------------------- */
 
 .rail-header {
   display: flex;
@@ -960,7 +960,7 @@ looq-diagnostics .diagnostics.warning {
 }
 
 /* Search-match highlighting: a plain span, not <mark> — see highlightHtml's doc
-   comment in looq-entry-table.ts for why (a real, measured cost, not style taste). */
+   comment in looqlog-entry-table.ts for why (a real, measured cost, not style taste). */
 .hl {
   background: var(--hl-bg);
   color: inherit;
@@ -978,7 +978,7 @@ looq-diagnostics .diagnostics.warning {
   margin: 0;
 }
 
-/* ---- looq-timeline ------------------------------------------------------- */
+/* ---- looqlog-timeline ------------------------------------------------------- */
 
 .timeline-summary {
   font-size: 0.85em;
@@ -1010,7 +1010,7 @@ looq-diagnostics .diagnostics.warning {
   margin-left: auto;
 }
 
-/* ---- looq-entry-table ------------------------------------------------------ */
+/* ---- looqlog-entry-table ------------------------------------------------------ */
 
 .entry-table-summary {
   font-size: 0.85em;
@@ -1022,7 +1022,7 @@ looq-diagnostics .diagnostics.warning {
   display: grid;
   /* One shared template, not content-based: every row is its own grid, so
      `max-content` columns would size per row and the columns would not line up.
-     The three widths are custom properties `looq-entry-table.ts` rewrites on a
+     The three widths are custom properties `looqlog-entry-table.ts` rewrites on a
      single `.entry-table-wrap` rule when the user drags a header handle (design
      D1) — one write, every row realigned, because every row reads the same
      variables. The defaults here are the widths the table shipped with before it
@@ -1034,7 +1034,7 @@ looq-diagnostics .diagnostics.warning {
      viewport and there is no horizontal scrollbar to reconcile. The timestamp
      column's default fits RFC 3339 with milliseconds minus the redundant UTC
      suffix rows no longer render (`2026-08-17T10:00:01.600`, see `rowTimestamp` in
-     looq-entry-table.ts); anything longer truncates (see `.col-timestamp` below)
+     looqlog-entry-table.ts); anything longer truncates (see `.col-timestamp` below)
      instead of running under the level badge. */
   grid-template-columns:
     var(--col-ordinal, 3rem)
@@ -1118,17 +1118,17 @@ looq-diagnostics .diagnostics.warning {
 
 /* The table fills its pane instead of living in a fixed 480px box inside a
    scrolling page (frontend-three-pane-layout task 1.3). The virtual scroller reads
-   `clientHeight` at render time (`looq-entry-table.ts`), so it follows whatever
+   `clientHeight` at render time (`looqlog-entry-table.ts`), so it follows whatever
    height the layout gives it with no code change; `min-height: 0` is what lets the
    flex item actually shrink to the pane rather than to its content. */
-looq-entry-table {
+looqlog-entry-table {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
 }
 
-looq-entry-table[hidden] {
+looqlog-entry-table[hidden] {
   display: none;
 }
 
@@ -1162,7 +1162,7 @@ looq-entry-table[hidden] {
 }
 
 /* The row height is a constant the virtual scroller does arithmetic with
-   (`ROW_HEIGHT` in looq-entry-table.ts), and it used to be written as an inline
+   (`ROW_HEIGHT` in looqlog-entry-table.ts), and it used to be written as an inline
    `style` attribute on every row it created — the easiest of the three inline
    sites to remove, and part of what lets the served CSP drop `'unsafe-inline'`
    (design D3). If you change it here, change `ROW_HEIGHT` too: they are asserted
@@ -1284,9 +1284,9 @@ looq-entry-table[hidden] {
   color: var(--warn);
 }
 
-/* ---- looq-entry-detail (the right pane) ------------------------------------ */
+/* ---- looqlog-entry-detail (the right pane) ------------------------------------ */
 
-looq-entry-detail {
+looqlog-entry-detail {
   display: block;
   font-size: 0.85em;
 }

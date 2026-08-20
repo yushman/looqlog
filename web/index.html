@@ -3,43 +3,43 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>looq</title>
+<title>looqlog</title>
 </head>
 <body>
   <div class="topbar">
-    <h1><span class="brand-mark" aria-hidden="true"></span>looq</h1>
+    <h1><span class="brand-mark" aria-hidden="true"></span>looqlog</h1>
     <!-- Wired by web/src/theme.ts (`theming` spec, design.md D6): applies the
          stored/system theme before the button exists, then this becomes the
          explicit override toggle (Auto -> Light -> Dark -> Auto). -->
     <button type="button" id="theme-toggle" class="theme-toggle"></button>
   </div>
   <!-- The run mode is stated by the workspace's own topbar row (web/src/components/
-       looq-workspace.ts), which is per-mode content — a hardcoded "file mode" line
+       looqlog-workspace.ts), which is per-mode content — a hardcoded "file mode" line
        here was wrong in stdin mode. -->
-  <!-- __LOOQ_HINT__ is substituted server-side (crates/looq/src/assets.rs,
+  <!-- __LOOQLOG_HINT__ is substituted server-side (crates/looqlog/src/assets.rs,
        ADR-0007) with already-escaped HTML naming the CLI-supplied path, or left as
        a generic prompt when no path was given. Kept inside a <template> so the raw
-       markup never executes as part of page load; looq-app.ts reads its contents
-       and hands them to <looq-drop-target> (this is content, not application logic
+       markup never executes as part of page load; looqlog-app.ts reads its contents
+       and hands them to <looqlog-drop-target> (this is content, not application logic
        — the app-shell spec's "no inline application script" is about <script>
        tags, not server-substituted hint text). -->
-  <template id="hint-template">__LOOQ_HINT__</template>
-  <!-- __LOOQ_MODE__ is substituted server-side (crates/looq/src/assets.rs) with a
+  <template id="hint-template">__LOOQLOG_HINT__</template>
+  <!-- __LOOQLOG_MODE__ is substituted server-side (crates/looqlog/src/assets.rs) with a
        small trusted JSON object naming the run mode and, in stdin mode, the
        configured --max-lines: {"mode":"file"} or {"mode":"stdin","maxLines":N}.
-       looq-app.ts reads it to decide whether to mount the file-mode UI or the
+       looqlog-app.ts reads it to decide whether to mount the file-mode UI or the
        live-tail UI (live-tail-ui spec). In `vite dev` (no backend), this stays the
-       literal placeholder string, which looq-app.ts treats as file mode — same
-       convention as __LOOQ_HINT__ above. -->
-  <template id="mode-template">__LOOQ_MODE__</template>
-  <!-- __LOOQ_TOKEN__ is substituted server-side (crates/looq/src/assets.rs,
+       literal placeholder string, which looqlog-app.ts treats as file mode — same
+       convention as __LOOQLOG_HINT__ above. -->
+  <template id="mode-template">__LOOQLOG_MODE__</template>
+  <!-- __LOOQLOG_TOKEN__ is substituted server-side (crates/looqlog/src/assets.rs,
        `security` spec, design.md D1) with a random per-process hex token. Read by
        web/src/token.ts and presented as the first message on `/ws`, never placed in
        the WebSocket URL/query string. In `vite dev` (no backend) this stays the
        literal placeholder, which is treated as "no token" — `/ws` isn't reachable
        under `vite dev` anyway (there's no backend process to serve it). -->
-  <template id="token-template">__LOOQ_TOKEN__</template>
-  <looq-app></looq-app>
+  <template id="token-template">__LOOQLOG_TOKEN__</template>
+  <looqlog-app></looqlog-app>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

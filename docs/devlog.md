@@ -2673,8 +2673,72 @@ frames with no marker of its own. Because the decision is lookbehind-only it can
 retroactively once the frames prove what it was — so without the header rule it breaks the
 chain, and the frames below are left with no prefixed root to attach to.
 
+## 2026-08-20 (later the same day) — `rename-to-looqlog`: `looq` collided in-category, before publish
+
+ADR-0006 named the closing condition itself: nothing short of a real conflict, decided
+before `cargo publish`, because crates.io never releases a name. That condition landed
+today. [Looq for macOS](https://www.producthunt.com/products/looq-3) is a Quick Look
+extension that reads log files and markets "Zero Data Collection, runs entirely
+locally" — this project's own pitch, aimed at the same audience, not just a name
+collision. [Looq AI](https://looq.ai/) holds `looq.ai` on top of that. `looq`,
+`looq-core` and `looq-wasm` were still unregistered on crates.io (verified 404s) and
+`v0.1.0` was days old and never announced, so this was the cheapest moment the window
+was ever going to be.
+
+**Shipped:** every `looq` identifier became `looqlog` — project, three crates
+(`crates/looq` → `crates/looqlog`, `-core`, `-wasm`, moved with `git mv` so history
+follows), the binary, the twelve custom element tags, the three `__LOOQ_*__` template
+placeholders (`crates/looqlog/src/assets.rs` and `assets/index.html` both, since a
+stale one on either side breaks the WebSocket auth token substitution silently — the
+page still loads, only the live-tail auth handshake fails), the theme `localStorage`
+key, both READMEs, `docs/PRD.md`/`TDR.md`/`mvp-plan.md`, CI and the release workflow,
+and `docs/adr/0009-project-renamed-to-looqlog.md` (ADR-0006 superseded by status line
+only, its body left as the record of what was correct on 2026-08-08's evidence). One
+name everywhere, not a `git-delta`-style crate/command split — the conflict is with a
+tool people type the name of, so the string that collides is the string that had to
+change.
+
+**What actually verified it, not just `cargo build` going green:** the vendored
+frontend bundle (`crates/looqlog/assets/assets/index.js`) has the twelve element names
+minified into it, so it was rebuilt via `./scripts/build-frontend.sh`, never
+text-replaced (ADR-0008) — confirmed no bare `looq-` tag survived in the rebuilt
+output. The ADR-0005 CI guard (`cargo tree -p looq-core -i wasm-bindgen`/`-i web-sys`)
+was proven to still *fire*, not just stay green: added a real `web-sys` dependency to
+`looqlog-core` locally, ran the exact guard command, watched it fail
+(`web-sys v0.3.104 └── looqlog-core`, exit 0 → job's `if` triggers), then reverted — a
+guard naming a crate that no longer exists would otherwise pass vacuously forever.
+Both run modes were exercised against the real release binary, not just unit tests:
+`scripts/smoke-release-binary.sh` piped a line into `--stdin` mode and confirmed it
+crossed `/ws` after the token handshake; a pty (`script -q /dev/null`) forced file
+mode headlessly and Playwright drove an actual file pick through the drop target,
+confirming the timeline and table render and every `looqlog-*` custom element resolved
+(`customElements.get` non-null, zero unresolved elements in the live DOM).
+
+**Numbers:** `cargo test --workspace` 208 passed, `npm test` 111 passed, `tsc --noEmit`
+clean, `cargo clippy --all-targets` and `cargo fmt --check` clean — same counts as
+before the rename, which is the actual evidence (design D5): a `grep -c looq` reaching
+zero is equally satisfied by a rename that broke the build.
+
+**User-visible change, recorded rather than left to be discovered:** the theme
+`localStorage` key changed with the tag names, so anyone who had already used the tool
+gets their light/dark preference reset once. Not worth a migration shim for one enum
+value, but silent is worse than small.
+
+**Owed, explicitly not done here:** the GitHub repository itself is still named
+`openlogviewer` — renaming it is an account-level action outside this session's
+scope, left for the maintainer. `openspec/specs/`'s delta application and archiving
+the change are likewise left to `/opsx:archive`, not applied by hand. Nothing here is
+published to crates.io yet; that is the next, truly irreversible step, and now it can
+be taken under a name that returns no competing product.
+
 ## Ideas for later
 
+- `free_port()` in `crates/looqlog/tests/cli.rs` documents itself as a "Small TOCTOU race in
+  theory; in practice fine for tests run in this sandbox". During the `rename-to-looqlog` work it
+  fired once for real — a single `cli.rs` failure that did not reproduce on two reruns. The
+  theory-versus-practice line is now out of date. A fix means holding the listener open and
+  passing the bound socket to the child, or retrying on `EADDRINUSE`; deliberately not folded
+  into a rename change, but a flaky integration suite teaches people to re-run instead of read.
 - A Python traceback's *source body* (`    return int(value)`) is linked by a
   previous-line rule — the line after a `File "…", line N` frame, if indented — rather than by a
   marker of its own, because it has none. Narrow and guarded, but it is the one recognizer that

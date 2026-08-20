@@ -1,7 +1,7 @@
 // The entry table's column-width model (`entry-table` spec, "Columns can be
 // resized"; design.md D1/D5/D6).
 //
-// It lives in its own module rather than inside `looq-entry-table.ts` because two
+// It lives in its own module rather than inside `looqlog-entry-table.ts` because two
 // unrelated places need the same numbers: the component that renders and drags
 // them, and `url-hash.ts`, which has to clamp a width that arrived from a shared
 // link without importing a Web Component (and without a DOM at all — that is what

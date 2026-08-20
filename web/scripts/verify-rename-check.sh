@@ -4,7 +4,7 @@
 #
 # What "catches" means here, precisely (design.md D2 open question, resolved in
 # docs/devlog.md: hand-written types, not tsify-generated): the TS interfaces in
-# wasm-types.ts are a hand-maintained mirror of crates/looq-wasm/src/dto.rs, not
+# wasm-types.ts are a hand-maintained mirror of crates/looqlog-wasm/src/dto.rs, not
 # generated from it, so `tsc` cannot detect a Rust-side rename directly — it has no
 # view of the Rust source. What it CAN and DOES catch is the failure mode D2
 # actually describes: a field is renamed (in Rust, and in this TS mirror, by the
@@ -14,7 +14,7 @@
 #
 # This script simulates exactly that: renames `EntryDto.ordinal` to `lineOrdinal` in
 # wasm-types.ts (the "interface got updated" half of the mistake) while leaving
-# looq-entry-table.ts's `entry.ordinal` read untouched (the "usage site got missed"
+# looqlog-entry-table.ts's `entry.ordinal` read untouched (the "usage site got missed"
 # half), runs the real CI type-check command, asserts it fails naming the stale
 # property, then restores both files from backups unconditionally (via a trap) so a
 # crash mid-script never leaves the working tree broken.
@@ -33,7 +33,7 @@ trap cleanup EXIT
 cp "$TYPES_FILE" "$BACKUP"
 
 # Rename only the interface field, not the (deliberately left stale) usage in
-# src/components/looq-entry-table.ts, which reads `entry.ordinal`.
+# src/components/looqlog-entry-table.ts, which reads `entry.ordinal`.
 sed -i.bak 's/  ordinal: number;/  lineOrdinal: number;/' "$TYPES_FILE"
 rm -f "$TYPES_FILE.bak"
 

@@ -3,9 +3,7 @@
 The `browser-file-loading` capability covers how a log file reaches the browser and
 gets into WASM without the backend ever reading its contents (the ADR-0002/ADR-0007
 contract, and the surface US-6 is verified against).
-
 ## Requirements
-
 ### Requirement: The user selects the file in the browser
 The page SHALL obtain the log file through a user gesture — a file picker or a drag-and-drop
 target — and SHALL NOT depend on the backend supplying the file's contents or a readable
@@ -23,15 +21,15 @@ path is a hint only (ADR-0007).
 ### Requirement: The CLI-supplied path is surfaced as a hint
 When the CLI was given a positional path, the page SHALL display that path so the user knows
 which file to select, and SHALL state that the file is read by the browser rather than by
-the `looq` process.
+the `looqlog` process.
 
 #### Scenario: Hint names the file
-- **WHEN** the user runs `looq /var/log/app.log` and opens the page
+- **WHEN** the user runs `looqlog /var/log/app.log` and opens the page
 - **THEN** the page prompts to open `/var/log/app.log` and explains that the file is read
   locally by the browser
 
 #### Scenario: No path given
-- **WHEN** the user runs `looq` in file mode with no path
+- **WHEN** the user runs `looqlog` in file mode with no path
 - **THEN** the page shows a plain "open a log file" prompt with no hint text
 
 ### Requirement: File contents stay in the browser
@@ -68,3 +66,4 @@ the page SHALL NOT assume any particular format.
 - **THEN** the wall-clock duration is measured in the browser and recorded in
   `docs/devlog.md` alongside the <200ms/MB target from TDR §11, superseding the skeleton's
   stub measurement and including the cost of the worker boundary
+

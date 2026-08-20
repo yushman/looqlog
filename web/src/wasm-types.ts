@@ -1,10 +1,10 @@
-// Hand-written TypeScript mirror of crates/looq-wasm/src/dto.rs (wasm-bridge spec,
+// Hand-written TypeScript mirror of crates/looqlog-wasm/src/dto.rs (wasm-bridge spec,
 // design.md D2 open question resolved: hand-written, not tsify-generated — see
 // docs/devlog.md for the reasoning). Kept in sync with the Rust DTOs by convention;
 // `tsc --noEmit` in CI catches stale field usages left behind by a rename on either
 // side (web/scripts/verify-rename-check.sh proves this mechanism actually fires).
 //
-// Field names are camelCase here because `crates/looq-wasm/src/lib.rs`'s
+// Field names are camelCase here because `crates/looqlog-wasm/src/lib.rs`'s
 // `to_js()` serializer is configured with `#[serde(rename_all = "camelCase")]` on
 // every DTO struct.
 

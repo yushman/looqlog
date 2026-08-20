@@ -1,16 +1,16 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/looq",
-    "crates/looq-core",
-    "crates/looq-wasm",
+    "crates/looqlog",
+    "crates/looqlog-core",
+    "crates/looqlog-wasm",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/yushman/openlogviewer"
+repository = "https://github.com/yushman/looqlog"
 
 [profile.release]
 opt-level = "s"

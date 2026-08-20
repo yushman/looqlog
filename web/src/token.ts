@@ -4,7 +4,7 @@
 // proxy access log.
 
 /** Same `<template>` convention as `#hint-template`/`#mode-template`
- * (`components/looq-app.ts`): `.innerHTML` is the one that reflects a
+ * (`components/looqlog-app.ts`): `.innerHTML` is the one that reflects a
  * `<template>`'s content, since its children live in an inert `.content`
  * DocumentFragment, not as direct children `.textContent` would see. Falls back to
  * the empty string both when the element is missing and when its content is still
@@ -12,5 +12,5 @@
 export function readAuthToken(): string {
   const template = document.getElementById("token-template") as HTMLTemplateElement | null;
   const raw = template?.innerHTML.trim() ?? "";
-  return raw === "__LOOQ_TOKEN__" ? "" : raw;
+  return raw === "__LOOQLOG_TOKEN__" ? "" : raw;
 }

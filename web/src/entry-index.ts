@@ -1,7 +1,7 @@
 // Time-ordered index over parsed entries (`entry-index` spec, design.md D1/D2/D4/D5).
 //
 // Entries stay in input order in a `Map` keyed by the parser-assigned `ordinal`
-// (`Entry.ordinal`, `crates/looq-core/src/entry.rs`) — a stable identity, and,
+// (`Entry.ordinal`, `crates/looqlog-core/src/entry.rs`) — a stable identity, and,
 // because the parser only ever increments it while emitting entries in input
 // order, also a correct proxy for input order: sorting ordinals numerically
 // recovers input order without a second array to track it (D2). `Map` iteration
@@ -13,7 +13,7 @@
 // Timestampless entries (D5) live in their own set and never enter `sorted` — they
 // are counted, never dropped, and never given a substitute time.
 //
-// This lives in TypeScript rather than `looq-core` (D1): it is a view structure,
+// This lives in TypeScript rather than `looqlog-core` (D1): it is a view structure,
 // consulted on every drag frame from the main thread, and it must survive
 // eviction. Revisit condition (measured in docs/devlog.md, task 1.6): move it into
 // the core crate if profiling shows index maintenance, not rendering, dominating

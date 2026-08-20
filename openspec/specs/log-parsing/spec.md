@@ -1,7 +1,7 @@
 # log-parsing Specification
 
 ## Purpose
-The `log-parsing` capability covers `looq-core`'s incremental byte-chunk-in,
+The `log-parsing` capability covers `looqlog-core`'s incremental byte-chunk-in,
 entries-and-diagnostics-out parse API, and the three MVP format parsers (JSON
 Lines, logfmt, plain-text fallback) that run underneath it. It defines how a
 malformed line, a non-UTF-8 byte sequence, or a chunk boundary that splits a line
@@ -10,7 +10,7 @@ a line — the parser is shared unmodified between file mode (large byte chunks)
 stdin mode (one line at a time), per ADR-0005 and design.md D1.
 ## Requirements
 ### Requirement: Incremental parse API
-`looq-core` SHALL expose a parser that accepts input as successive byte chunks and returns
+`looqlog-core` SHALL expose a parser that accepts input as successive byte chunks and returns
 the entries completed by each chunk, so that a file read in pieces and a stdin stream
 arriving line by line use the same code path. The parser SHALL hold back an incomplete
 trailing line until the next chunk or an explicit finish call, and SHALL be target-agnostic:

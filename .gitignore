@@ -5,5 +5,5 @@ target/
 web/node_modules/
 web/dist/
 # wasm-pack output vendored by scripts/build-frontend.sh (ADR-0008) — regenerated,
-# not source; the committed copy lives in crates/looq/assets/wasm/.
+# not source; the committed copy lives in crates/looqlog/assets/wasm/.
 web/public/wasm/

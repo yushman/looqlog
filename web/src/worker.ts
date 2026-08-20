@@ -31,7 +31,7 @@ const CORE_WASM_JS_PATH: string = "/wasm/core.js";
 const wasmModulePromise = import(/* @vite-ignore */ CORE_WASM_JS_PATH) as Promise<CoreWasmModule>;
 // Explicit path: the glue's own default lookup (`new URL('core_bg.wasm', ...)`)
 // assumes the wasm file is named `core_bg.wasm` next to `core.js`; this repo names
-// it `core.wasm` to match the route `crates/looq/src/server.rs` serves and the
+// it `core.wasm` to match the route `crates/looqlog/src/server.rs` serves and the
 // `local-server` spec's "core.wasm" naming, so the path is passed explicitly.
 const wasmReady: Promise<void> = wasmModulePromise
   .then((mod) => mod.default({ module_or_path: "/wasm/core.wasm" }))
@@ -54,7 +54,7 @@ const api: ParserWorkerApi = {
     // Discard the previous instance (design.md D4) before constructing the new one.
     active?.handle.free();
     const id = nextSessionId++;
-    // `Date.now()` is read here, not in `looq-core`: ADR-0005 keeps that crate
+    // `Date.now()` is read here, not in `looqlog-core`: ADR-0005 keeps that crate
     // target-agnostic and clock-free, so the reference instant year-less timestamp
     // shapes (syslog RFC 3164 `Aug  8 17:42:01`, klog `0808 17:42:01`) need to be
     // dated at all is supplied by the caller. Read per session rather than once at

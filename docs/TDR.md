@@ -1,22 +1,22 @@
-# TDR — looq
+# TDR — looqlog
 
 **Status:** Draft v1.0
 **Date:** 2026-08-08
-**Author:** looq maintainers
+**Author:** looqlog maintainers
 **Licence:** MIT
 
 ---
 
 ## 1. Summary
 
-looq — single-binary CLI на Rust, запускающий локальный web-сервер для просмотра логов из файла или stdin. Парсинг выполняется в WebAssembly на стороне браузера, что обеспечивает полную privacy: содержимое логов не покидает машину пользователя. CLI проксирует только stdin через WebSocket для live-tail.
+looqlog — single-binary CLI на Rust, запускающий локальный web-сервер для просмотра логов из файла или stdin. Парсинг выполняется в WebAssembly на стороне браузера, что обеспечивает полную privacy: содержимое логов не покидает машину пользователя. CLI проксирует только stdin через WebSocket для live-tail.
 
 Целевая аудитория: разработчики и SRE, разбирающие инциденты по `kubectl logs > file.log`, `docker logs > file.log`, или tail'ящие приложение в реальном времени через pipe.
 
 ## 2. Goals / Non-Goals
 
 ### Goals
-- Single binary, zero external dependencies, runs as `looq file.log` или `app | looq`
+- Single binary, zero external dependencies, runs as `looqlog file.log` или `app | looqlog`
 - Privacy-first: парсинг в WASM на клиенте, файл загружается через File API
 - Live tail из stdin через WebSocket
 - Auto-detect формата: JSON, logfmt, syslog, plain text с regex
@@ -112,34 +112,34 @@ looq — single-binary CLI на Rust, запускающий локальный 
 Установка:
 ```bash
 # Из исходников
-cargo install looq
+cargo install looqlog
 
 # Через single binary
-curl -L https://github.com/.../releases/latest/download/looq-linux-x86_64 -o looq
-chmod +x looq
+curl -L https://github.com/.../releases/latest/download/looqlog-linux-x86_64 -o looqlog
+chmod +x looqlog
 ```
 
 ## 6. CLI Interface
 
 ```bash
 # Открыть файл
-looq app.log
+looqlog app.log
 
 # Live tail из stdin
-myapp | looq
+myapp | looqlog
 
 # Или с явным флагом
-tail -f /var/log/app.log | looq --stdin
+tail -f /var/log/app.log | looqlog --stdin
 
 # Настройка порта
-looq --port 9000 app.log
-looq --port 0 file.log    # случайный порт
+looqlog --port 9000 app.log
+looqlog --port 0 file.log    # случайный порт
 
 # Авто-открытие браузера
-looq --open file.log
+looqlog --open file.log
 
 # Версия
-looq --version
+looqlog --version
 ```
 
 **Все флаги:**
@@ -311,7 +311,7 @@ design.md D8):** вложенные JSON-объекты/массивы (`{"http"
   `wscat`/любым WS-клиентом, на чём построены все тесты этого изменения.
   Зафиксирован измеримый триггер пересмотра: если сериализация envelope
   проявится в профиле на целевой пропускной способности — переключиться на
-  бинарный формат. Замер (`crates/looq/tests/cli.rs`,
+  бинарный формат. Замер (`crates/looqlog/tests/cli.rs`,
   `snapshot_at_default_max_lines_is_delivered_promptly`, release-сборка):
   snapshot на 100 000 строк (~110 байт/строка, ~12.7 МБ JSON) доставляется за
   ~81 мс одним WS-сообщением — чанкинг (D3, запасной план) не потребовался.
@@ -341,11 +341,11 @@ design.md D8):** вложенные JSON-объекты/массивы (`{"http"
 
 ### Что это
 
-Режим `--mcp` запускает **stdio MCP server** (Model Context Protocol), через который AI-агенты (Claude Desktop, Cursor, Cline, и т.д.) могут вызывать инструменты `looq_*` для чтения лог-файла пользователя.
+Режим `--mcp` запускает **stdio MCP server** (Model Context Protocol), через который AI-агенты (Claude Desktop, Cursor, Cline, и т.д.) могут вызывать инструменты `looqlog_*` для чтения лог-файла пользователя.
 
 ```
 ┌──────────────────┐  stdio JSON-RPC  ┌──────────────────┐
-│ AI Agent         │ ───────────────► │ looq --mcp       │
+│ AI Agent         │ ───────────────► │ looqlog --mcp       │
 │ (Claude Desktop) │                  │  ├── core lib    │
 │                  │ ◄─────────────── │  └── file parser │
 └──────────────────┘   structured     └──────────────────┘
@@ -362,10 +362,10 @@ design.md D8):** вложенные JSON-объекты/массивы (`{"http"
 
 | Tool | Args | Returns |
 |---|---|---|
-| `looq_open` | `path: string` | `entry_count, format_detected, time_range` |
-| `looq_query` | `filter?: string, range?: [ts_from, ts_to], limit?: number` | `entries: [{ts, level, message, fields}]` |
-| `looq_summarize` | `range?: [ts_from, ts_to]` | `stats: {by_level, top_errors, anomalies}` |
-| `looq_list_files` | `glob: string` | `paths: [string]` |
+| `looqlog_open` | `path: string` | `entry_count, format_detected, time_range` |
+| `looqlog_query` | `filter?: string, range?: [ts_from, ts_to], limit?: number` | `entries: [{ts, level, message, fields}]` |
+| `looqlog_summarize` | `range?: [ts_from, ts_to]` | `stats: {by_level, top_errors, anomalies}` |
+| `looqlog_list_files` | `glob: string` | `paths: [string]` |
 
 ### Transport
 
@@ -377,19 +377,19 @@ design.md D8):** вложенные JSON-объекты/массивы (`{"http"
 
 ```bash
 # Запуск MCP server для конкретного файла
-looq --mcp /var/log/app.log
+looqlog --mcp /var/log/app.log
 
 # MCP server + web UI одновременно (два процесса, share через WASM)
-looq --mcp --web app.log
+looqlog --mcp --web app.log
 ```
 
 ### Use case
 
 ```
 User (в Claude Desktop): "Что упало в app.log за последний час?"
-Claude: → looq_open("/var/log/app.log")
-       → looq_query(range=["2026-08-08T20:00","2026-08-08T21:00"])
-       → looq_summarize(...)
+Claude: → looqlog_open("/var/log/app.log")
+       → looqlog_query(range=["2026-08-08T20:00","2026-08-08T21:00"])
+       → looqlog_summarize(...)
        → отвечает пользователю структурированным объяснением
 ```
 
@@ -408,5 +408,5 @@ User не копипастит лог в чат — агент читает ег
 |---|---|
 | MCP SDK нестабилен | минимальная своя реализация как fallback |
 | Агент шлёт гигантские ответы | `limit` параметр (default 100), `range` обязателен для `query` |
-| Path traversal через `looq_open` | reject absolute paths outside cwd + `$LOOQ_ALLOWED_DIRS` env var |
-| Агент пытается читать `/etc/shadow` через `looq_list_files` | glob валидация + audit log всех файловых доступов |
+| Path traversal через `looqlog_open` | reject absolute paths outside cwd + `$LOOQLOG_ALLOWED_DIRS` env var |
+| Агент пытается читать `/etc/shadow` через `looqlog_list_files` | glob валидация + audit log всех файловых доступов |

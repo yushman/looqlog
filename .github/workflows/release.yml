@@ -3,7 +3,7 @@ name: Release
 # `packaging` spec, "A version tag publishes downloadable binaries" (design D1): a
 # `v*` tag is the single source of truth for what shipped. This workflow never
 # invokes wasm-pack or npm — the frontend artifacts are vendored in
-# crates/looq/assets/ (ADR-0008), and CI's frontend-artifact-staleness job already
+# crates/looqlog/assets/ (ADR-0008), and CI's frontend-artifact-staleness job already
 # guards their freshness on every push to main.
 
 on:
@@ -73,7 +73,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build
-        run: cargo build --release --locked -p looq --target ${{ matrix.target }}
+        run: cargo build --release --locked -p looqlog --target ${{ matrix.target }}
 
       - name: Locate built binary
         id: bin
@@ -83,7 +83,7 @@ jobs:
           if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
             EXT=".exe"
           fi
-          echo "path=target/${{ matrix.target }}/release/looq${EXT}" >> "$GITHUB_OUTPUT"
+          echo "path=target/${{ matrix.target }}/release/looqlog${EXT}" >> "$GITHUB_OUTPUT"
           echo "ext=${EXT}" >> "$GITHUB_OUTPUT"
 
       # design D3: proves the artifact runs, not just that it links. Same four
@@ -101,7 +101,7 @@ jobs:
           MIB=$(awk "BEGIN { printf \"%.2f\", ${BYTES}/1048576 }")
           echo "bytes=${BYTES}" >> "$GITHUB_OUTPUT"
           {
-            echo "### looq ${{ matrix.target }}"
+            echo "### looqlog ${{ matrix.target }}"
             echo "Size: ${BYTES} bytes (~${MIB} MiB)"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -119,7 +119,7 @@ jobs:
         id: stage
         shell: bash
         run: |
-          ASSET_NAME="looq-${VERSION}-${{ matrix.target }}${{ steps.bin.outputs.ext }}"
+          ASSET_NAME="looqlog-${VERSION}-${{ matrix.target }}${{ steps.bin.outputs.ext }}"
           mkdir -p dist
           cp "${{ steps.bin.outputs.path }}" "dist/${ASSET_NAME}"
           echo "${{ steps.size.outputs.bytes }}" > "dist/${ASSET_NAME}.size"
@@ -146,7 +146,7 @@ jobs:
         shell: bash
         run: |
           {
-            echo "## looq ${VERSION}"
+            echo "## looqlog ${VERSION}"
             echo
             echo "Binary sizes against TDR §5's budget (~10 MB for Linux x86_64, ~10.5 MB total):"
             echo
@@ -169,6 +169,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: looq ${{ needs.check-version.outputs.version }}
+          name: looqlog ${{ needs.check-version.outputs.version }}
           body_path: release-body.md
           files: release-assets/*

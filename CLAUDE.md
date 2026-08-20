@@ -1,4 +1,4 @@
-# looq
+# looqlog
 
 Single-binary Rust CLI that opens a local web UI for a log file or a live stdin
 stream. Parsing happens in WebAssembly inside the user's browser — privacy first,
@@ -29,7 +29,7 @@ CLI (axum + tokio, 127.0.0.1:PORT)
         ↓
 Browser (TypeScript + WASM)
   ├── File API: file stays in browser memory, never sent to the backend
-  ├── WASM core (looq-core, target-agnostic, ADR-0005): format detect, parse, index
+  ├── WASM core (looqlog-core, target-agnostic, ADR-0005): format detect, parse, index
   └── UI: timeline (uPlot), virtual-scrolled table, filters, search
 ```
 
@@ -39,20 +39,25 @@ Key constraints, each with an ADR:
 - Bind to `127.0.0.1` by default, `--host` is an explicit, warned opt-in — [ADR-0003](docs/adr/0003-bind-127-0-0-1-by-default.md)
 - stdin buffering is a bounded ring buffer with snapshot-on-connect — [ADR-0004](docs/adr/0004-ring-buffer-stdin-snapshot.md)
 - Core parser crate is target-agnostic (wasm + native adapters), MCP transport is `rmcp` — [ADR-0005](docs/adr/0005-target-agnostic-core-crate-rmcp.md)
-- The project, binary and crate are all named `looq` — [ADR-0006](docs/adr/0006-project-named-looq.md)
+- The project, binary and crate were originally named `looq`, superseded by ADR-0009 — [ADR-0006](docs/adr/0006-project-named-looq.md)
+- The project, binary and every crate are named `looqlog` — [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)
 
 **Privacy asymmetry to keep straight (TDR §12):** file mode never leaves the browser;
-stdin/live-tail mode goes over an unauthenticated localhost WebSocket, so it "does not
-leave the machine" but does cross a process boundary. Do not describe both modes with
-the same guarantee in UI copy or docs.
+stdin/live-tail mode goes over a localhost WebSocket in the clear, so it "does not leave
+the machine" but does cross a process boundary. The `/ws` origin check and per-process
+token (`security` spec) guard that socket against another page in the same browser, not
+against another process on the machine — and neither protects a non-loopback `--host`
+(ADR-0003). Do not describe both modes with the same guarantee in UI copy or docs:
+"never leaves your machine" holds for both, "never leaves your browser" only for file
+mode.
 
 ## Stack
 
 - Backend: Rust 1.74+, `axum` 0.8, `tokio`, `clap`, `tracing`
-- Core parser (`looq-core`): target-agnostic Rust lib crate, no `wasm-bindgen`/`web-sys`
+- Core parser (`looqlog-core`): target-agnostic Rust lib crate, no `wasm-bindgen`/`web-sys`
 - WASM adapter: `wasm-bindgen`, `serde-wasm-bindgen`, built via `wasm-pack`
 - Frontend: TypeScript (strict), Vite, Web Components, `uPlot`, `comlink`
-- MCP (P2, not in MVP): `rmcp` SDK, native adapter over `looq-core`
+- MCP (P2, not in MVP): `rmcp` SDK, native adapter over `looqlog-core`
 
 ## Testing
 
@@ -68,7 +73,7 @@ rather than loud (see TDR §7, §8, §12 and ADR-0004):
 - `--host` != `127.0.0.1` must always print the exposure warning — a missed warning
   is a silent privacy regression.
 - WASM parse/filter latency regressions (TDR §11 targets) are easy to introduce
-  silently; benchmark before merging changes to `looq-core`'s hot paths.
+  silently; benchmark before merging changes to `looqlog-core`'s hot paths.
 
 ## Spec-driven workflow (OpenSpec) — required
 

@@ -14,7 +14,7 @@
 // `node:fs`, which would need `@types/node` — a dependency this change is not
 // entitled to add.
 import cssSource from "./style.css?raw";
-import tableSource from "./components/looq-entry-table.ts?raw";
+import tableSource from "./components/looqlog-entry-table.ts?raw";
 
 import { describe, expect, it } from "vitest";
 
@@ -114,7 +114,7 @@ describe("the grid template is variable-driven (design D1)", () => {
 describe("continuation chains render as groups (`entry-table` spec)", () => {
   it("styles the group control and the member indentation in the stylesheet", () => {
     // Same reason as the row height above: the class names are written in
-    // `looq-entry-table.ts` and styled in `style.css`, and a drift between the two
+    // `looqlog-entry-table.ts` and styled in `style.css`, and a drift between the two
     // is invisible — the chain still collapses, it just stops looking like a group.
     expect(tableCode).toContain("chain-toggle");
     expect(tableCode).toContain("chain-count");

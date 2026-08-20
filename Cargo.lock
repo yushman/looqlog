@@ -886,13 +886,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
-name = "looq"
+name = "looqlog"
 version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
  "futures-util",
- "looq-core",
+ "looqlog-core",
  "rand 0.8.7",
  "serde",
  "serde_json",
@@ -904,7 +904,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "looq-core"
+name = "looqlog-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -913,11 +913,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "looq-wasm"
+name = "looqlog-wasm"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "looq-core",
+ "looqlog-core",
  "serde",
  "serde-wasm-bindgen",
  "wasm-bindgen",

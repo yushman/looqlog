@@ -1,4 +1,4 @@
-# looq
+# looqlog
 
 Single-binary CLI that opens a local web UI for browsing a log file or a live stdin
 stream. Parsing happens in WebAssembly inside your own browser, so log contents never
@@ -27,29 +27,35 @@ leave your machine.
 ## Why
 
 `grep`/`awk`/`less` have no timeline or structure. Kibana/Grafana need infrastructure.
-Online log viewers send your data to someone else's server. looq is one
+Online log viewers send your data to someone else's server. looqlog is one
 binary: point it at a file or pipe stdin into it, and get a searchable, filterable,
 timeline-driven UI in your own browser — privacy-first, zero config.
 
 ## Install
 
 Download a prebuilt binary from the
-[Releases page](https://github.com/yushman/openlogviewer/releases/latest), matching
+[Releases page](https://github.com/yushman/looqlog/releases/latest), matching
 your platform:
 
 ```bash
 # Linux x86_64 (statically linked, runs on any distribution)
-curl -LO https://github.com/yushman/openlogviewer/releases/latest/download/looq-0.1.0-x86_64-unknown-linux-musl
-chmod +x looq-0.1.0-x86_64-unknown-linux-musl
-./looq-0.1.0-x86_64-unknown-linux-musl --version
+curl -LO https://github.com/yushman/looqlog/releases/latest/download/looqlog-0.1.0-x86_64-unknown-linux-musl
+chmod +x looqlog-0.1.0-x86_64-unknown-linux-musl
+./looqlog-0.1.0-x86_64-unknown-linux-musl --version
 ```
 
 Also published for `aarch64-apple-darwin`, `x86_64-apple-darwin` and
 `x86_64-pc-windows-msvc`. Every asset is smoke-tested on its own platform before
 being published — see "Which platforms are verified how" below.
 
-`cargo install looq` is planned but not published yet — publishing to crates.io is
+`cargo install looqlog` is planned but not published yet — publishing to crates.io is
 irreversible and needs the maintainer's own token, so it isn't done casually.
+
+> **If you already installed `v0.1.0`:** that release shipped a binary named `looq`.
+> The project and every release from here on are named `looqlog`; there is no
+> in-place upgrade path, and the old `looq` binary is not touched or removed by
+> installing this one. Reinstall using the instructions above and, if you like,
+> remove the old `looq` binary yourself.
 
 Building from source needs only the Rust toolchain — the compiled frontend
 (`core.wasm` + JS glue) is committed to the repository, so `cargo build`/`cargo
@@ -57,10 +63,10 @@ install` never invoke Node.js or `wasm-pack` (see
 [ADR-0008](docs/adr/0008-vendored-frontend-artifacts.md)):
 
 ```bash
-git clone https://github.com/yushman/openlogviewer
-cd openlogviewer
+git clone https://github.com/yushman/looqlog
+cd looqlog
 cargo build --release
-./target/release/looq --version
+./target/release/looqlog --version
 ```
 
 ### Which platforms are verified how
@@ -78,9 +84,9 @@ them turns out broken in practice, that's a bug report worth filing.
 ### Frontend development
 
 The `web/` directory is a Vite + TypeScript project; it's only needed if you're
-changing the frontend, not for building or installing `looq` itself (that path is
+changing the frontend, not for building or installing `looqlog` itself (that path is
 Rust-only, see above). `scripts/build-frontend.sh` builds it (via `wasm-pack` +
-`npm`) and vendors the output into `crates/looq/assets/`, which is what actually
+`npm`) and vendors the output into `crates/looqlog/assets/`, which is what actually
 ships:
 
 ```bash
@@ -90,14 +96,14 @@ cargo build --release
 
 ## Usage
 
-looq has two run modes, and — this matters — they give different privacy
+looqlog has two run modes, and — this matters — they give different privacy
 guarantees. See [ADR-0002](docs/adr/0002-wasm-browser-parsing-file-mode.md) and TDR §12
 for the full reasoning.
 
 ### File mode
 
 ```bash
-looq app.log
+looqlog app.log
 ```
 
 This starts the server and prints `app.log` as a **hint** — it does not open or read
@@ -105,16 +111,16 @@ the file itself, and it can't: no browser API lets a page auto-open a path chose
 server (see [ADR-0007](docs/adr/0007-argv-path-is-a-hint-not-an-auto-loaded-file.md)).
 Open the printed URL, then pick `app.log` yourself through the page's file picker or
 drag it onto the drop target. The file is read and parsed entirely in your browser;
-`looq` never sees its contents, which you can verify yourself — the DevTools Network
+`looqlog` never sees its contents, which you can verify yourself — the DevTools Network
 panel stays empty after the page loads, and parsing keeps working with the network
 disabled.
 
 ### Stdin mode
 
 ```bash
-myapp | looq
+myapp | looqlog
 # or explicitly:
-tail -f /var/log/app.log | looq --stdin
+tail -f /var/log/app.log | looqlog --stdin
 ```
 
 Lines from stdin are streamed to connected browsers over an unauthenticated localhost
@@ -124,7 +130,7 @@ indicator says so explicitly, in different words from file mode's "never leaves 
 browser" (TDR §12).
 
 The backend holds a bounded ring buffer (`--max-lines`, default 100,000) filled from
-process start regardless of whether a browser is connected, so `myapp | looq` followed
+process start regardless of whether a browser is connected, so `myapp | looqlog` followed
 a few seconds later by opening the browser still shows everything `myapp` already
 printed: a new or reloaded connection gets a snapshot of the buffer, then switches to
 live streaming. A slow or absent browser never blocks the producer — under sustained
@@ -136,22 +142,22 @@ that pauses when you scroll away, and reconnects with backoff if the connection 
 ### Other flags
 
 ```bash
-looq --port 9000 app.log     # pick a port (0 = random free port)
-looq --open app.log          # auto-open the default browser once ready
-looq --host 0.0.0.0 app.log  # expose beyond localhost — prints a mandatory warning
+looqlog --port 9000 app.log     # pick a port (0 = random free port)
+looqlog --open app.log          # auto-open the default browser once ready
+looqlog --host 0.0.0.0 app.log  # expose beyond localhost — prints a mandatory warning
 ```
 
-Run `looq --help` for the full flag list (`--port`, `--host`, `--open`,
+Run `looqlog --help` for the full flag list (`--port`, `--host`, `--open`,
 `--no-browser`, `--stdin`, `--max-lines`).
 
 ## Supported log formats
 
-looq auto-detects **JSON Lines**, **logfmt** and **plain text** by sampling the first
+looqlog auto-detects **JSON Lines**, **logfmt** and **plain text** by sampling the first
 100 non-empty lines; a format wins only if at least 80% of them parse under it. You can
 override the choice with `#format=json|logfmt|plain` in the URL.
 
 Plain text is not a dead end. Most real log lines are a *prefix* carrying when and how
-bad, followed by a *payload* carrying everything else, so looq reads both:
+bad, followed by a *payload* carrying everything else, so looqlog reads both:
 
 **Timestamps.** Recognised at token starts within the first 64 bytes of the line — not
 only at its very beginning, so an access log that opens with a client address still gets
@@ -170,7 +176,7 @@ a timeline:
 **Levels.** Taken first from a `level`/`lvl`/`severity` field, then from the token right
 after the timestamp — `INFO`, `[INFO]`, `INFO:`, a syslog priority like `<130>`, or a
 klog/logcat single letter (`I`, `W`, `E`, `D`, `V`, `F`) — and only then by scanning the
-message text. syslog's eight severities fold onto the six looq uses
+message text. syslog's eight severities fold onto the six looqlog uses
 (`emerg`/`alert`/`crit` → FATAL, `err` → ERROR, `warning` → WARN, `notice`/`info` → INFO,
 `debug` → DEBUG).
 
@@ -211,14 +217,14 @@ unwrapped: the `log` member is parsed as a line in its own right, `time` supplie
 timestamp when the inner line has none, and `stream` becomes a field. So
 `docker logs > file.log` reads as the application's own log, not as an escaped blob.
 
-**Inferred years.** syslog, klog and logcat timestamps carry no year. looq infers one from your
+**Inferred years.** syslog, klog and logcat timestamps carry no year. looqlog infers one from your
 browser's clock — stepping back a year rather than dating an entry in the future — and
 says so on every affected entry (*"year inferred — this timestamp shape carries none"* in
 the detail view). A log older than about a year will be dated wrong; the flag is there so
 you can tell.
 
 **Multi-line events.** A stack trace, a Python traceback and a pretty-printed JSON payload
-are each one event that happens to span several lines, and looq links those lines back to
+are each one event that happens to span several lines, and looqlog links those lines back to
 the entry that starts them. It does so on positive evidence only: an explicit frame marker
 (`at `, `Caused by:`, `... N more`, `Suppressed:`, `Traceback (most recent call last):`,
 `File "…", line N`, or an exception header whose last dotted segment ends in `Exception`,
@@ -302,7 +308,7 @@ value naming a pane that doesn't exist is dropped and reported while the rest of
 value still applies, so neither a bad width nor a bad pane name is ever a reason for a
 log not to load.
 
-**Live streams.** All of the above applies to `myapp | looq` too — filters and search
+**Live streams.** All of the above applies to `myapp | looqlog` too — filters and search
 are evaluated against each line as it arrives, the entry count distinguishes what
 matched from the total received, and changing a filter mid-stream re-evaluates every
 retained line immediately, without reconnecting.
@@ -322,14 +328,14 @@ stylesheet rather than through `style` attributes.
   request's own `Host` is refused with `403` before any handshake completes and
   before any stdin data can flow.
 - **Per-process token handshake.** The served page embeds a random token generated
-  once when `looq` starts. The page's own JS sends it as the first message on every
+  once when `looqlog` starts. The page's own JS sends it as the first message on every
   `/ws` connection (never in the URL or query string, so it can't end up in shell
   history or a proxy log); a connection that doesn't present it within a few seconds
   is closed without any data being sent.
 
 **What this protects against, stated plainly so it isn't mistaken for more:** a page
 on a different origin — e.g. a malicious tab open in the same browser — cannot read
-the token (it can't fetch your `looq` page's HTML cross-origin) and so cannot open
+the token (it can't fetch your `looqlog` page's HTML cross-origin) and so cannot open
 the stdin stream. It does **not** protect against another process on the same
 machine, which can just fetch the page itself the same way a browser would. It does
 **not** add any protection to `--host 0.0.0.0` or any other non-loopback bind —
@@ -348,7 +354,7 @@ consistent ~3.4x the raw file size. Two thresholds follow from that:
 
 - **Above ~50MB**, opening a file shows a warning (continue/cancel) — parsing and
   memory use both become noticeable past this point.
-- **Above 400MB**, looq refuses to start parsing at all and explains why, rather than
+- **Above 400MB**, looqlog refuses to start parsing at all and explains why, rather than
   starting a parse that could fail partway through with an out-of-memory error you
   can't interpret. Split the file (e.g. by time range) or filter it down first.
 
@@ -386,7 +392,7 @@ anywhere, so both appearances render fully with the network disabled.
   fields.
 - **Access-log fields aren't broken out.** An Apache/nginx combined line gets a
   timestamp and a message, but `status`, `method` and `path` do not become their own
-  filterable fields — looq recognises timestamp shapes generically rather than shipping a
+  filterable fields — looqlog recognises timestamp shapes generically rather than shipping a
   named grammar per format, so nothing knows that the number after the request is a
   status code.
 - **No user-defined format patterns.** If your in-house format's timestamp matches none
@@ -397,7 +403,7 @@ anywhere, so both appearances render fully with the network disabled.
   metadata — something it deliberately doesn't do. Those lines still become entries, just
   without a timestamp.
 - **No bugreport section awareness.** `------ DUMPSYS … ------` banners are ordinary
-  lines to looq; it does not treat an Android bugreport as a container of sections with a
+  lines to looqlog; it does not treat an Android bugreport as a container of sections with a
   format each. Every line is parsed on its own terms, which is why a bugreport's ~74% of
   `dumpsys` output stays off the timeline while its logcat sections land on it.
 - **No gzip/zstd decompression, no multi-file merge, no export** — all explicitly out

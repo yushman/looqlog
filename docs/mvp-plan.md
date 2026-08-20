@@ -2,7 +2,7 @@
 
 **Build length:** 6 weeks / 30 working days (matches TDR §15 milestone estimate).
 **Feature freeze:** day 25 (end of week 5) · **Release + buffer:** days 26–30.
-**Golden path:** `looq app.log` → browser opens → file parsed in WASM (JSON /
+**Golden path:** `looqlog app.log` → browser opens → file parsed in WASM (JSON /
 logfmt / plain auto-detected) → timeline + virtual table appear (PRD Flow 1).
 **Riskiest assumption:** WASM parsing throughput can hit TDR §11 targets (<200ms/MB
 JSON parse, <50ms filter on 10k lines) — tested by day 4, not after a full parser is
@@ -42,7 +42,7 @@ architecturally prepared for (ADR-0005) but not implemented; see PRD §8 Out of 
 ## Week 1 — Backend skeleton + risk spike (M1)
 
 ### Day 1 — Cargo workspace, axum hello world
-- [ ] `cargo new` workspace: `looq` (bin) + `looq-core` (lib, empty placeholder) (~2h)
+- [ ] `cargo new` workspace: `looqlog` (bin) + `looqlog-core` (lib, empty placeholder) (~2h)
 - [ ] axum server binds `127.0.0.1:7891`, one route returns `200 OK` (~2h)
 **Done when:** `curl http://127.0.0.1:7891` returns 200.
 
@@ -50,7 +50,7 @@ architecturally prepared for (ADR-0005) but not implemented; see PRD §8 Out of 
 - [ ] `clap`-based argv: `--port`, `--host`, `--open`, `--no-browser`, `--stdin`,
   `--max-lines`, `--version`, `--help` per TDR §6 (~3h)
 - [ ] `include_bytes!` scaffold serving a placeholder `index.html` (~2h)
-**Done when:** `looq --help` prints every flag from TDR §6; `looq anyfile.log`
+**Done when:** `looqlog --help` prints every flag from TDR §6; `looqlog anyfile.log`
 serves the placeholder page.
 
 ### Day 3 — Walking skeleton ← checkpoint
@@ -58,7 +58,7 @@ serves the placeholder page.
   built with `wasm-pack`, embedded into the binary (~4h)
 - [ ] Inline JS: File API reads a local fixture, calls WASM `parse()`, logs entry
   count to console (~2h)
-**Done when:** `looq tests/fixtures/sample.jsonl` starts the server and the page shows
+**Done when:** `looqlog tests/fixtures/sample.jsonl` starts the server and the page shows
 `tests/fixtures/sample.jsonl` as a hint; after the user picks that file through the
 page's file picker (per ADR-0007 — no browser API can auto-open a server-supplied path
 without a user gesture), the console shows an entry count matching the fixture's line
@@ -81,7 +81,7 @@ and document it — do not silently keep building against an unverified number.
 ### Day 5 — M1 completion: stdin + WebSocket
 - [ ] `/ws` WebSocket echo endpoint, stdin read in its own tokio task (~3h)
 - [ ] Graceful shutdown on Ctrl+C, `--stdin` vs file-path detection wired end to end (~2h)
-**Done when:** `echo hi | looq --stdin` opens a socket that echoes `hi` to a
+**Done when:** `echo hi | looqlog --stdin` opens a socket that echoes `hi` to a
 `wscat` client; M1 backend skeleton is complete.
 
 **Week 1 done when:** M1 complete + riskiest-assumption number recorded (day 4).
@@ -91,9 +91,9 @@ and document it — do not silently keep building against an unverified number.
 ## Week 2 — Core parsers (M2)
 
 ### Day 6 — JSON Lines + logfmt parsers
-- [ ] JSON Lines parser in `looq-core`, unit tests (~3h)
+- [ ] JSON Lines parser in `looqlog-core`, unit tests (~3h)
 - [ ] logfmt (`key=value`) parser, unit tests (~2h)
-**Done when:** `cargo test -p looq-core` and `wasm-pack test` both green for both
+**Done when:** `cargo test -p looqlog-core` and `wasm-pack test` both green for both
 formats.
 
 ### Day 7 — Plain-text fallback + auto-detect
@@ -132,7 +132,7 @@ time, each parse correctly end-to-end with zero backend file reads.
 - [ ] stdin line → `/ws` → WASM parse path wired for real (not just echo) (~3h)
 - [ ] Bounded ring buffer on backend (`--max-lines`, default 100k) + snapshot sent
   on connect, per ADR-0004 (~3h)
-**Done when:** `myapp | looq` then opening the browser a few seconds later shows
+**Done when:** `myapp | looqlog` then opening the browser a few seconds later shows
 the lines emitted before connection, then continues live.
 
 ### Day 12 — Backpressure
@@ -200,7 +200,7 @@ console errors on a real fixture, hands-off of any hardcoded fixture-specific lo
 ### Day 21 — Live tail UI
 - [ ] `LIVE` indicator + lines/sec counter in top bar (~2h)
 - [ ] Autoscroll with throttling, gap indicator surfaced from day-12 backend event (~2h)
-**Done when:** PRD Flow 2 (`myapp | looq --open`) shows the live indicator,
+**Done when:** PRD Flow 2 (`myapp | looqlog --open`) shows the live indicator,
 counter, and a visible gap marker under a synthetic backpressure test.
 
 ### Day 22 — URL hash state (F-15)
@@ -212,7 +212,7 @@ view (PRD Flow 3 step 4).
 ### Day 23 — CLI polish (F-14)
 - [ ] `--open` auto-opens the default browser, `--no-browser` suppresses it (~2h)
 - [ ] `--port 0` allocates a random free port (~1h)
-**Done when:** `looq --open file.log` opens a browser tab without manual action;
+**Done when:** `looqlog --open file.log` opens a browser tab without manual action;
 `--port 0` prints a different port each run.
 
 ### Day 24 — Performance pass

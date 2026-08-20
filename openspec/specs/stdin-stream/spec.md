@@ -3,16 +3,14 @@
 The `stdin-stream` capability covers reading stdin off the main request path and
 transporting lines to connected browsers over `/ws`, with a bounded ring buffer,
 snapshot-on-connect, backpressure and a structured message envelope (ADR-0004).
-
 ## Requirements
-
 ### Requirement: Stdin is read off the request path
 In stdin mode the CLI SHALL read stdin line by line in a task independent of the HTTP
 server, starting before any client connects. Reading SHALL NOT block on the presence,
 absence or slowness of a WebSocket client.
 
 #### Scenario: Producer is not blocked by a missing client
-- **WHEN** a producer writes lines to `looq --stdin` with no browser connected
+- **WHEN** a producer writes lines to `looqlog --stdin` with no browser connected
 - **THEN** the producer is never blocked and the process keeps consuming stdin
 
 #### Scenario: Producer is not blocked by a slow client
@@ -27,7 +25,7 @@ envelope (see "Structured message envelope"), preserving line order and excludin
 trailing newline from the carried text.
 
 #### Scenario: Line reaches a connected client
-- **WHEN** `echo hi | looq --stdin` is running and a `wscat` client connects to
+- **WHEN** `echo hi | looqlog --stdin` is running and a `wscat` client connects to
   `ws://127.0.0.1:7891/ws`
 - **THEN** the client receives a `line` message whose `text` field is `hi`
 
@@ -47,7 +45,7 @@ the stream has ended, not left waiting indefinitely for a signal that was alread
 nobody.
 
 #### Scenario: EOF does not kill the server
-- **WHEN** `printf 'a\nb\n' | looq --stdin` finishes writing and stdin closes
+- **WHEN** `printf 'a\nb\n' | looqlog --stdin` finishes writing and stdin closes
 - **THEN** the HTTP server is still reachable and the client has been told the stream ended
 
 #### Scenario: Late connection after stdin already closed
@@ -62,7 +60,7 @@ the moment the process starts and regardless of whether any client is connected.
 buffer is full, the oldest lines SHALL be dropped (ADR-0004).
 
 #### Scenario: Lines emitted before the browser opens survive
-- **WHEN** a producer writes 500 lines to `looq --stdin` and a browser connects afterwards
+- **WHEN** a producer writes 500 lines to `looqlog --stdin` and a browser connects afterwards
 - **THEN** the browser receives those 500 lines
 
 #### Scenario: Memory stays bounded over a long run
@@ -120,3 +118,4 @@ Raw unlabelled line text SHALL NOT be sent.
 #### Scenario: A line containing envelope-like text is not misread
 - **WHEN** a log line's own text looks like a serialised envelope
 - **THEN** it is delivered as an ordinary line message and its content is not interpreted
+

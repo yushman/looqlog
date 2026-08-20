@@ -1,7 +1,7 @@
 # format-detection Specification
 
 ## Purpose
-The `format-detection` capability covers how `looq-core` chooses which of the
+The `format-detection` capability covers how `looqlog-core` chooses which of the
 three MVP formats (JSON Lines, logfmt, plain text) parses a given input, by
 sampling the first non-empty lines and requiring a candidate to cross a threshold
 before it wins — rather than the first line deciding the whole file's format. It

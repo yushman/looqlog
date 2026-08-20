@@ -8,7 +8,7 @@
 // declaration, the dynamic import's result is explicitly cast to this type in
 // worker.ts — still the other half of the typed boundary alongside `wasm-types.ts`:
 // `ParserHandle`'s methods return the DTOs defined there, matching
-// `crates/looq-wasm/src/lib.rs` and `dto.rs` field-for-field.
+// `crates/looqlog-wasm/src/lib.rs` and `dto.rs` field-for-field.
 
 import type {
   DetectionResultDto,
@@ -17,7 +17,7 @@ import type {
   FieldInventoryDto,
 } from "./wasm-types";
 
-/** One-to-one with `crates/looq-wasm/src/lib.rs`'s `ParserHandle`. */
+/** One-to-one with `crates/looqlog-wasm/src/lib.rs`'s `ParserHandle`. */
 export interface ParserHandleInstance {
   feed(chunk: Uint8Array): EntryDto[];
   finish(): EntryDto[];
@@ -34,7 +34,7 @@ export interface ParserHandleInstance {
 
 export interface ParserHandleConstructor {
   /** `referenceMs`: the caller's "now" as epoch milliseconds, used to infer a year for
-   * timestamp shapes that carry none (syslog RFC 3164, klog). `looq-core` never reads
+   * timestamp shapes that carry none (syslog RFC 3164, klog). `looqlog-core` never reads
    * the clock itself (ADR-0005), so omitting this leaves those shapes unrecognised —
    * an empty timeline for syslog and k8s logs. worker.ts passes `Date.now()`. */
   new (

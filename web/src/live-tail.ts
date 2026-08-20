@@ -1,9 +1,9 @@
 // Stream session logic for live tail (`stdin-stream`/`live-tail-ui` specs,
 // `entry-index`/`timeline`/`entry-table` specs, design.md D1-D8). No DOM here —
-// `components/looq-live-tail.ts` owns rendering and polls this class on a timer
+// `components/looqlog-live-tail.ts` owns rendering and polls this class on a timer
 // (D6: batched rendering, decoupled from the lines/sec counter).
 //
-// The entry index mirrors the backend's two-buffer split (`crates/looq/src/
+// The entry index mirrors the backend's two-buffer split (`crates/looqlog/src/
 // stdin.rs`'s module doc): it is this session's own entry retention, evicted at
 // `maxLines` (D4) independent of the WebSocket transport; the WebSocket layer below
 // only ever forwards what the backend sends, unbuffered on this side beyond the
@@ -36,12 +36,12 @@ export interface StreamSummary {
  * One long-lived parser instance for the life of the stream (D7) — unlike
  * `bridge.ts`'s `ParserBridge`, which discards and reconstructs a fresh instance
  * per file. Lines are fed one at a time through the same worker API
- * (`parser-api.ts`); the underlying `looq_core::Parser` already holds opening lines
+ * (`parser-api.ts`); the underlying `looqlog_core::Parser` already holds opening lines
  * until its detection sample fills (D5's "hold" is free), so the only thing this
  * class adds is the timeout escape hatch: forcing `finish()` early flushes and
  * finalizes detection on whatever arrived, without ending the session — nothing in
  * the worker API marks a session "closed", so `feed()` calls after a `finish()`
- * keep working (verified against `crates/looq-core/src/parser.rs`: `finish()` only
+ * keep working (verified against `crates/looqlog-core/src/parser.rs`: `finish()` only
  * flushes a trailing partial line and finalizes detection if still sampling; it does
  * not reset or invalidate the instance).
  */
@@ -53,7 +53,7 @@ export class StreamParserSession {
   /** Set the moment `feedLine` is first called (not when it *completes* — being
    * queued is enough to prove real data is on its way), and the timestamp of that
    * first call. Guards `doRefresh` against forcing detection on a still-empty
-   * sample: `looq_core::Parser::finalize_detection` on an empty sample is a
+   * sample: `looqlog_core::Parser::finalize_detection` on an empty sample is a
    * *permanent* fallback to plain text (state can never re-enter Sampling), so
    * `doRefresh` must never call `finish()` while zero lines have ever been fed —
    * not even after a timeout, because "no data yet" and "never going to get data"
@@ -183,7 +183,7 @@ const RECONNECT_MAX_MS = 10_000;
  * backoff), sequence-number bookkeeping (gap detection from two independent
  * sources — explicit `gap` messages and sequence discontinuity, D2), client-side
  * eviction at `maxLines` (D4), and the one long-lived parser instance for the
- * stream (D7). No rendering — `looq-live-tail.ts` polls `getIndex()`/`getSummary()`
+ * stream (D7). No rendering — `looqlog-live-tail.ts` polls `getIndex()`/`getSummary()`
  * on its own timers.
  */
 export class LiveTailSession {
@@ -338,7 +338,7 @@ export class LiveTailSession {
       // Sequence numbers are monotonic for the life of one backend process
       // (stdin.rs's `StdinBuffer`) — a *lower* last_seq than what this client
       // already saw can only mean the backend process itself restarted (a fresh
-      // `looq --stdin` run, not a network blip reconnecting to the same one).
+      // `looqlog --stdin` run, not a network blip reconnecting to the same one).
       // design.md's reconnect scenarios all assume the same running process; a
       // full restart is a narrower edge case they don't cover. Treating this
       // snapshot as first-connect (reprocess everything in it, keep existing rows

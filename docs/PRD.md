@@ -1,9 +1,9 @@
-# PRD — looq
+# PRD — looqlog
 
 **Version:** 1.0
 **Date:** 2026-08-08
 **Status:** Draft
-**Owner:** looq maintainers
+**Owner:** looqlog maintainers
 
 ---
 
@@ -67,8 +67,8 @@ myapp > app.log
 **Как** разработчик, **я хочу** открыть `app.log` в нормальном UI, **чтобы** не использовать `grep`/`awk`/`less`.
 
 **Acceptance:**
-- `looq app.log` запускает сервер и открывает браузер на `http://127.0.0.1:7891`; страница
-  показывает `app.log` как подсказку, какой файл выбрать — сам процесс `looq` файл не
+- `looqlog app.log` запускает сервер и открывает браузер на `http://127.0.0.1:7891`; страница
+  показывает `app.log` как подсказку, какой файл выбрать — сам процесс `looqlog` файл не
   открывает и не читает (см. ADR-0007: ни один browser API не может открыть путь,
   переданный сервером, без жеста пользователя)
 - Пользователь выбирает файл через file picker или drag-and-drop → файл парсится,
@@ -80,7 +80,7 @@ myapp > app.log
 **Как** разработчик, **я хочу** видеть логи приложения в реальном времени, **чтобы** не перезапускать tail каждый раз.
 
 **Acceptance:**
-- `myapp | looq` запускает сервер
+- `myapp | looqlog` запускает сервер
 - Строки из stdin появляются в таблице без перезагрузки
 - Latency < 100 мс на localhost
 - Ring buffer: при превышении лимита старые строки удаляются
@@ -121,7 +121,7 @@ myapp > app.log
 **Как** тимлид, **я хочу** чтобы установка была тривиальной, **чтобы** команда не тратила время на setup.
 
 **Acceptance:**
-- `cargo install looq` или готовый бинарь
+- `cargo install looqlog` или готовый бинарь
 - README с примерами на 1 страницу
 - Demo video < 2 минут
 
@@ -129,8 +129,8 @@ myapp > app.log
 **Как** разработчик с Cursor/Claude Desktop, **я хочу** чтобы агент мог открыть лог-файл через MCP и ответить на вопрос "что упало в последний час?", **чтобы** не копипастить логи в чат руками.
 
 **Acceptance:**
-- `looq --mcp` запускает MCP server на stdio
-- Агент может вызвать `looq_open(path)`, `looq_query(filter, range)`, `looq_summarize(range)`
+- `looqlog --mcp` запускает MCP server на stdio
+- Агент может вызвать `looqlog_open(path)`, `looqlog_query(filter, range)`, `looqlog_summarize(range)`
 - Файл не покидает машину (MCP = локальный IPC, не HTTP вовне)
 - Privacy гарантии из US-6 сохраняются
 
@@ -177,9 +177,9 @@ myapp > app.log
 ### Flow 1: First run
 
 ```
-$ looq app.log
+$ looqlog app.log
 ┌────────────────────────────────────────┐
-│  looq v0.1.0                           │
+│  looqlog v0.1.0                           │
 │  → http://127.0.0.1:7891               │
 │  Press Ctrl+C to quit                  │
 └────────────────────────────────────────┘
@@ -190,7 +190,7 @@ $ looq app.log
 ### Flow 2: Live tail
 
 ```
-$ myapp | looq --open
+$ myapp | looqlog --open
 [streaming...]
 ```
 

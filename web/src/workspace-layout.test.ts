@@ -10,7 +10,7 @@
 // in this change's tasks.md.
 
 import cssSource from "./style.css?raw";
-import workspaceSource from "./components/looq-workspace.ts?raw";
+import workspaceSource from "./components/looqlog-workspace.ts?raw";
 
 import { describe, expect, it } from "vitest";
 

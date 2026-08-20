@@ -17,7 +17,7 @@ import type { TimeRange } from "./time-range";
 export type FieldFilters = ReadonlyMap<string, ReadonlySet<string>>;
 
 /** `level` is a first-class `EntryDto` property, not a member of `fields` (the
- * parser only inventories arbitrary fields — `crates/looq-core/src/parser.rs`
+ * parser only inventories arbitrary fields — `crates/looqlog-core/src/parser.rs`
  * calls `inventory.record` for everything except timestamp/level/message). Chips
  * treat it as a field anyway (`filtering` spec: "chips for `level` and for the
  * fields the parser reported"), so every place that resolves "the value of field X
@@ -30,7 +30,7 @@ export function fieldDisplayValue(entry: EntryDto, field: string): string | null
   return value === undefined ? null : displayFieldValue(value);
 }
 
-/** Mirrors `FieldValue::display()` (`crates/looq-core/src/entry.rs`) — the same
+/** Mirrors `FieldValue::display()` (`crates/looqlog-core/src/entry.rs`) — the same
  * canonical string a value was counted under in the field inventory, so a chip's
  * value always matches what an entry actually carries. */
 export function displayFieldValue(value: FieldValueDto): string {

@@ -1,6 +1,6 @@
 # 0006. Project and binary are named `looq`
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0009
 - **Date:** 2026-08-08
 
 ## Context

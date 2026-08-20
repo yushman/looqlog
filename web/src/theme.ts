@@ -8,7 +8,7 @@
 
 export type ThemeOverride = "light" | "dark";
 
-const STORAGE_KEY = "looq-theme";
+const STORAGE_KEY = "looqlog-theme";
 
 function readStoredOverride(): ThemeOverride | null {
   try {
