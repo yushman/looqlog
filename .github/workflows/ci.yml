@@ -12,7 +12,7 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -21,7 +21,7 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -30,7 +30,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
 
@@ -40,7 +40,7 @@ jobs:
   build-no-node:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release
       - run: cargo package --list -p looqlog
@@ -51,7 +51,7 @@ jobs:
   adr-0005-boundary:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: looqlog-core must not depend on wasm-bindgen or web-sys
         run: |
@@ -83,15 +83,23 @@ jobs:
   frontend-artifact-staleness:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      # Pinned: rustc is an input to the diffed bytes, and this is the only job
+      # where that matters — `fmt`/`clippy`/`test`/`build-no-node`/`adr-0005-boundary`
+      # stay on @stable so a new release still turns those red instead of silently
+      # doing nothing. The other copy of this number is `EXPECTED_RUSTC` in
+      # scripts/build-frontend.sh.
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: wasm32-unknown-unknown
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
+      # Pinned for the same reason as rustc above: wasm-pack's own version affects
+      # the bytes it produces, and an unpinned `npm install -g wasm-pack` tracks
+      # whatever released most recently.
       - name: Install wasm-pack
-        run: npm install -g wasm-pack
+        run: npm install -g wasm-pack@0.15.0
       # Pinned: wasm-opt is part of the artifact, so an unpinned binaryen makes the
       # rebuilt core.wasm differ from the committed one with no source change.
       # Without this, wasm-pack downloads its own copy — which also failed
@@ -131,16 +139,29 @@ jobs:
               diff <(strings -a /tmp/committed.bin | sort -u) <(strings -a "$f" | sort -u) \
                 | head -10 | while IFS= read -r l; do echo "::error::  strings: $l"; done
             done
+            echo "::error::the rebuilt crates/looqlog/assets/ is attached to this run as a downloadable artifact — see the Artifacts section below."
             exit 1
           fi
+      # The error annotations above describe the drift but don't keep the bytes; this
+      # step does. The committed side is always recoverable from git, but the rebuilt
+      # side exists only inside this runner — without this, a failure like the
+      # unexplained 216,854-byte core.wasm drift (docs/devlog.md) is rebuilt over the
+      # moment someone reruns the job, losing the only evidence of what actually
+      # changed. Separate step because the diff step above exits non-zero on drift.
+      - name: Upload rebuilt assets on drift
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-assets-${{ github.run_id }}
+          path: crates/looqlog/assets/
 
   # app-shell / wasm-bridge specs: strict TypeScript build and type check, wired
   # into CI so a type error blocks the build (browser-app-shell task 1.2).
   frontend-typecheck-and-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - working-directory: web
@@ -157,8 +178,8 @@ jobs:
   frontend-type-check-catches-rename:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - working-directory: web

@@ -2900,17 +2900,73 @@ regardless of size. Against ~80 ms/MB of parsing it is 0.09% of a single megabyt
 of a 200 MB file. No benchmark added: a fixed 72 µs cannot regress anything measurable, and a
 criterion group guarding it would be permanent upkeep for a number that cannot move.
 
+## 2026-08-23 (second entry) — `pin-frontend-build-inputs`: pinning the job caught the job's own blind spot
+
+Pinned the two floating inputs to `frontend-artifact-staleness`'s byte-exact diff. `rustc`:
+`dtolnay/rust-toolchain@stable` → `dtolnay/rust-toolchain@1.97.1`, in that job only —
+`fmt`/`clippy`/`test`/`build-no-node`/`adr-0005-boundary` stay on `@stable`, because a root
+`rust-toolchain.toml` would have rustup honour the pin for every cargo invocation in the workspace
+and silently freeze those five jobs too, trading their job — catching a new stable's regressions —
+for silence (design D1). `wasm-pack`: unpinned `npm install -g wasm-pack` →
+`wasm-pack@0.15.0`. Confirmed both numbers before pinning, per task 1.1: `rustc --version`,
+`wasm-pack --version`, `wasm-opt --version` on this machine read `1.97.1`, `0.15.0`, `132` — matching
+what built the committed artifact, `132` (binaryen) already pinned. `scripts/build-frontend.sh`
+gained a matching `EXPECTED_RUSTC=1.97.1` check, warning-not-failing the same way the existing
+binaryen check does. `wasm-pack build` now forwards `-- --locked`, so a stale `Cargo.lock` fails the
+build instead of silently resolving to different dependency versions and changing the artifact.
+`actions/upload-artifact@v4`, guarded by `if: failure()`, now uploads the rebuilt
+`crates/looqlog/assets/` when the diff step fails, so a future drift keeps its own evidence instead
+of depending on someone remembering to save it before rebuilding over it — the exact way the
+216,854-byte `core.wasm` anomaly (2026-08-20 entry, four above) lost its only lead. `actions/checkout@v4`
+→ `@v5` and `actions/setup-node@v4` → `@v5` across `ci.yml`, `release.yml` and `pages.yml`, clearing
+the Node-20 deprecation annotation every run carried.
+
+Verifying task 3.3 — rebuild locally, expect an empty diff — found a real bug instead of confirming
+the pin. `./scripts/build-frontend.sh` printed no warnings, but `git diff --stat --
+crates/looqlog/assets/` was not empty: `crates/looqlog/assets/wasm/core.wasm | Bin 216857 -> 216885
+bytes`, and `cmp -l` between the two counted 102,441 differing bytes — not the handful a path-remap
+mismatch produces. Two rebuilds in a row were byte-identical to each other, and a rebuild with
+`-- --locked` stripped back out was identical to both, which ruled out this change's own edits as the
+cause. `git log --oneline -- crates/looqlog-core/src/` pointed at `156044f` ("let a timestamp prefix
+outrank logfmt in detection", earlier the same day): it edited `detect.rs`, the file whose logic the
+wasm serves, and never touched `crates/looqlog/assets/`. The detection fix had shipped inert — the
+binary was still running the pre-`156044f` detector — and CI never caught it, because the commit
+alone was never pushed through the staleness job. Fixed independently as `46e3db4` ("rebuild the
+vendored core.wasm for the detection fix"), sitting on top of `156044f` and below this change.
+Re-running `./scripts/build-frontend.sh` once `46e3db4` was in place: no warnings, `git diff --stat --
+crates/looqlog/assets/` empty. Both halves of task 3.3's claim now hold for real.
+
+`cargo test --workspace` hit the `free_port()` TOCTOU race (`crates/looqlog/tests/cli.rs`, on the
+Ideas list below) during this work — second real occurrence, the first being during
+`rename-to-looqlog`. One run: `test result: FAILED. 25 passed; 2 failed` in `tests/cli.rs`, both
+failures `assertion failed: wait_until_serving(port, Duration::from_secs(5))` in
+`ctrl_c_exits_zero_within_one_second_and_releases_the_port` and
+`every_response_carries_the_csp_header`. Next run, no code change: `test result: ok. 27 passed; 0
+failed`. A fix is queued next rather than folded into this change.
+
+`cargo fmt --all -- --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+`cargo test --workspace` on a clean run: 215 passed, 0 failed (19 + 27 + 119 + 50, plus three empty
+doc-test/unit suites). No README change: nothing about install steps, commands, flags, output or
+limitations changed — this change only touched CI configuration, the local build script's warnings,
+and the vendored artifact's freshness guarantee.
+
 ## Ideas for later
 
 - The 216,854-byte `core.wasm` from the rename work is unexplained (entry above). If the
   staleness job fires again with no source change, capture the failing artifact and
   `wasm-dis` both sides before rebuilding — the code-section diff is the only remaining
-  lead, and it was thrown away this time by rebuilding over it.
-- CI installs the toolchain with `dtolnay/rust-toolchain@stable` and `wasm-pack` from npm
+  lead, and it was thrown away this time by rebuilding over it. **2026-08-23:** the
+  staleness job now uploads the rejected `crates/looqlog/assets/` as a run artifact on
+  failure, so the next occurrence no longer depends on someone remembering to save it
+  before rebuilding over it.
+- ~~CI installs the toolchain with `dtolnay/rust-toolchain@stable` and `wasm-pack` from npm
   unpinned, while binaryen is pinned to 132. Two of the three inputs to a byte-exact
   artifact float. They happened to match this time — checked, they did — but the next
   stable release will fail the staleness job on somebody's unrelated push, and it will
-  look like their fault.
+  look like their fault.~~ **Done, 2026-08-23.** `frontend-artifact-staleness` now pins
+  `rustc` (`dtolnay/rust-toolchain@1.97.1`) and `wasm-pack` (`0.15.0`) in that job only;
+  `scripts/build-frontend.sh` warns on a local mismatch the same way it already does for
+  binaryen.
 - `free_port()` in `crates/looqlog/tests/cli.rs` documents itself as a "Small TOCTOU race in
   theory; in practice fine for tests run in this sandbox". During the `rename-to-looqlog` work it
   fired once for real — a single `cli.rs` failure that did not reproduce on two reruns. The
@@ -2930,12 +2986,16 @@ criterion group guarding it would be permanent upkeep for a number that cannot m
 - ~~**The next release must ship a rebuilt `core.wasm`.**~~ **Done, 2026-08-20 (v0.2.0).**
   Confirmed the way the item asked: the wasm served by a binary installed from crates.io
   contains no `/Users/…` path, no builder username and no `producers` section.
-- Nobody has run the Linux binary on a Linux machine — `ship-0-1-0-release` task 6.2, left open
+- ~~Nobody has run the Linux binary on a Linux machine — `ship-0-1-0-release` task 6.2, left open
   in its archive on purpose. The runner smoke-tested it and the downloaded file is confirmed
-  `static-pie linked`, but that is not the same claim.
-- `actions/checkout@v4` and `actions/setup-node@v4` run on Node 20, which GitHub has deprecated;
+  `static-pie linked`, but that is not the same claim.~~ **Won't do, 2026-08-23.** Corrected
+  claim: the musl binary is built and smoke-tested on `ubuntu-latest`, which is a real Linux
+  machine; what remains untested is a non-Ubuntu, non-glibc distribution, and running one is a
+  deliberate gap, not an open task.
+- ~~`actions/checkout@v4` and `actions/setup-node@v4` run on Node 20, which GitHub has deprecated;
   every CI run carries the warning annotation. Moving to v5 is unrelated to any current failure,
-  which is why it was deliberately not folded into the staleness fix.
+  which is why it was deliberately not folded into the staleness fix.~~ **Done, 2026-08-23.**
+  Bumped to `@v5` across `ci.yml`, `release.yml` and `pages.yml`.
 
 - Resizable rail/detail panes, deliberately deferred by `frontend-three-pane-layout`'s Non-Goals
   rather than half-built; the widths are fixed at 18rem/22rem today.

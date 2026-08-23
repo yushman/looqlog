@@ -22,7 +22,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # The landing is plain HTML and one stylesheet on purpose: no build step means
       # nothing to keep in sync with the app's toolchain, and nothing that can break
       # the site on a dependency bump. `site/` is uploaded as-is.

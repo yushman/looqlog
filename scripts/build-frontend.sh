@@ -51,14 +51,26 @@ else
   echo "         not be version $EXPECTED_BINARYEN — see above." >&2
 fi
 
+# rustc is also an input to the diffed bytes — same reasoning as binaryen above.
+# CI pins this version in the frontend-artifact-staleness job; warn loudly here too.
+EXPECTED_RUSTC=1.97.1
+have_rustc=$(rustc --version | awk '{print $2}')
+if [ "$have_rustc" != "$EXPECTED_RUSTC" ]; then
+  echo "warning: rustc version $have_rustc, expected $EXPECTED_RUSTC — the rebuilt" >&2
+  echo "         core.wasm will differ from CI's and fail the staleness check." >&2
+fi
+
 rm -rf "$WASM_TMP"
+# --locked: a stale or updatable Cargo.lock must fail the build, not resolve to
+# different dependency versions and silently change the artifact's bytes.
 wasm-pack build "$ROOT/crates/looqlog-wasm" \
   --target web \
   --out-dir "$WASM_TMP" \
   --out-name core \
   --release \
   --no-typescript \
-  --no-pack
+  --no-pack \
+  -- --locked
 
 mkdir -p "$WEB_DIR/public/wasm"
 cp "$WASM_TMP/core.js" "$WEB_DIR/public/wasm/core.js"
