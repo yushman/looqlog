@@ -2950,6 +2950,41 @@ doc-test/unit suites). No README change: nothing about install steps, commands, 
 limitations changed — this change only touched CI configuration, the local build script's warnings,
 and the vendored artifact's freshness guarantee.
 
+## 2026-08-23 (third entry) — closing the `free_port()` TOCTOU: two races, two different fixes
+
+Fixed the flake flagged twice above (`crates/looqlog/tests/cli.rs`, on the Ideas list). Two distinct
+races were hiding under one doc comment. Intra-process: cargo runs this binary's tests on multiple
+threads, and `free_port()`'s bind-then-drop could hand two threads the identical port once the first
+listener released it. Closed for good by `CLAIMED_PORTS`, a process-lifetime `HashSet<u16>` guarded by
+a `Mutex` — `free_port()` now loops until the OS gives back a port not already in the set, and entries
+are never removed, so no two tests in this process can ever collide on a port again, regardless of how
+the OS reissues freed ones. Cross-process — something else on the machine grabbing the port between
+allocation and the child's own `bind()` — can't be closed by allocation alone, since it isn't this
+process's port to protect. Added `spawn_with_retry`: pick a port, spawn, wait up to 5s for the server
+to answer, and on failure kill the child, claim a fresh port, and try again, bounded to
+`SPAWN_ATTEMPTS = 3` and panicking by name on exhaustion rather than looping silently.
+`spawn_stdin_mode`/`spawn_pty_file_mode` stayed low-level (still take a `port: u16`, still just spawn);
+`spawn_with_retry` owns port selection now, so all 24 `let port = free_port();` call sites became
+`let (mut child, port) = spawn_with_retry(...)`.
+
+`ctrl_c_exits_zero_within_one_second_and_releases_the_port` needed care: it asserts the port is free
+again after SIGINT, and a retry loop that silently re-picked ports could have masked exactly that
+failure. It doesn't — `spawn_with_retry` only retries the "did the server come up" step, and by the
+time it returns, the port is confirmed serving; the release assertion runs afterward as its own,
+independent check outside the retry, so a real port-release regression still fails the test. Commented
+in place at the call site.
+
+No production code touched — the rejected alternative (a `--listen-fd` flag, passing a bound socket to
+the child) was test-only scaffolding masquerading as an app feature, and the constraint against it
+held.
+
+`cargo test --workspace`: 215 passed, 0 failed (19 + 27 + 119 + 50, plus three empty doc-test/unit
+suites). `cargo fmt --all -- --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`:
+clean. `for i in $(seq 1 10); do cargo test -p looqlog --test cli || echo "FAILED on run $i"; done`:
+10/10 runs green, `test result: ok. 27 passed; 0 failed` every time — doesn't exercise the
+cross-process half (that needs another process actually racing for the port), but confirms the
+intra-process fix holds and nothing else broke.
+
 ## Ideas for later
 
 - The 216,854-byte `core.wasm` from the rename work is unexplained (entry above). If the
@@ -2967,12 +3002,15 @@ and the vendored artifact's freshness guarantee.
   `rustc` (`dtolnay/rust-toolchain@1.97.1`) and `wasm-pack` (`0.15.0`) in that job only;
   `scripts/build-frontend.sh` warns on a local mismatch the same way it already does for
   binaryen.
-- `free_port()` in `crates/looqlog/tests/cli.rs` documents itself as a "Small TOCTOU race in
+- ~~`free_port()` in `crates/looqlog/tests/cli.rs` documents itself as a "Small TOCTOU race in
   theory; in practice fine for tests run in this sandbox". During the `rename-to-looqlog` work it
   fired once for real — a single `cli.rs` failure that did not reproduce on two reruns. The
   theory-versus-practice line is now out of date. A fix means holding the listener open and
   passing the bound socket to the child, or retrying on `EADDRINUSE`; deliberately not folded
-  into a rename change, but a flaky integration suite teaches people to re-run instead of read.
+  into a rename change, but a flaky integration suite teaches people to re-run instead of read.~~
+  **Done, 2026-08-23.** Closed the intra-process half with a process-lifetime claimed-ports
+  registry in `free_port()` and the cross-process half with a bounded `spawn_with_retry`; see the
+  third entry above.
 - A Python traceback's *source body* (`    return int(value)`) is linked by a
   previous-line rule — the line after a `File "…", line N` frame, if indented — rather than by a
   marker of its own, because it has none. Narrow and guarded, but it is the one recognizer that

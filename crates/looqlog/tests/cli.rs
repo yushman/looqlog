@@ -11,23 +11,88 @@
 //! "macos")`-gated and skipped elsewhere rather than silently asserting the wrong
 //! thing.
 
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_looqlog")
 }
 
-/// Ask the OS for a free port and immediately release it. Small TOCTOU race in
-/// theory; in practice fine for tests run in this sandbox.
+/// Ports this test binary has already handed out via `free_port()`, kept for the
+/// life of the process. Cargo runs these tests on multiple threads, so two threads
+/// calling `free_port()` around the same time could otherwise get the identical
+/// port: thread A binds `127.0.0.1:0`, reads the port, and drops the listener;
+/// before thread A's child ever binds it, thread B's own `bind("127.0.0.1:0")` can
+/// be reissued that exact same port by the OS. Entries here are never removed, so
+/// once this process has handed a port to one test it will never hand that same
+/// port to another — closing the intra-process half of the race regardless of how
+/// the OS reissues freed ports.
+static CLAIMED_PORTS: LazyLock<Mutex<HashSet<u16>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Ask the OS for a free port, immediately release it, and guarantee no other test
+/// in this process has already been handed that same port (see `CLAIMED_PORTS`).
+///
+/// What this does *not* guarantee: that the port is still free by the time a child
+/// process binds it. Anything outside this test binary — another process on the
+/// machine grabbing it first, or the OS simply reissuing it to an unrelated caller
+/// — can still take it in the gap between this call returning and the child's
+/// `bind()`. That cross-process half of the race can't be closed by allocation
+/// alone; `spawn_with_retry` below covers it with a bounded retry instead.
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind ephemeral port")
-        .local_addr()
-        .unwrap()
-        .port()
+    let mut claimed = CLAIMED_PORTS.lock().unwrap();
+    loop {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .expect("bind ephemeral port")
+            .local_addr()
+            .unwrap()
+            .port();
+        if claimed.insert(port) {
+            return port;
+        }
+        // Already handed to another test in this process — the OS reissued a port
+        // we're still relying on elsewhere. Try again rather than let two children
+        // race for it.
+    }
+}
+
+/// How many fresh ports `spawn_with_retry` will try before giving up. Bounds the
+/// cross-process race described on `free_port()`: enough to ride out a transient
+/// port grab by something else on the machine, small enough that a genuinely broken
+/// binary fails fast instead of hanging the test suite.
+const SPAWN_ATTEMPTS: u32 = 3;
+
+/// Pick a port via `free_port()`, spawn the child with it via `spawn`, and wait up
+/// to `timeout` for the server to come up. If it never does, kill the child, claim a
+/// fresh port, and try again — the only lever left against the cross-process race,
+/// since the chosen port may simply have been taken by something else between
+/// allocation and the child's own `bind()`. Returns the child together with the
+/// port it actually ended up serving on, which may differ from the port of a failed
+/// earlier attempt.
+fn spawn_with_retry(timeout: Duration, mut spawn: impl FnMut(u16) -> Child) -> (Child, u16) {
+    let mut last_port = 0;
+    for attempt in 1..=SPAWN_ATTEMPTS {
+        let port = free_port();
+        last_port = port;
+        let mut child = spawn(port);
+        if wait_until_serving(port, timeout) {
+            return (child, port);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        eprintln!(
+            "spawn attempt {attempt}/{SPAWN_ATTEMPTS} on port {port} never came up \
+             within {timeout:?}; retrying with a new port"
+        );
+    }
+    panic!(
+        "looqlog never started serving after {SPAWN_ATTEMPTS} attempts (last port \
+         tried: {last_port}) — likely something outside this test binary is racing \
+         for the same ephemeral ports"
+    );
 }
 
 /// Minimal HTTP/1.1 GET, no external HTTP client dependency needed for a status-line
@@ -156,12 +221,7 @@ fn unknown_flag_is_rejected_loudly_and_starts_no_server() {
 
 #[test]
 fn default_bind_serves_200() {
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(
-        wait_until_serving(port, Duration::from_secs(5)),
-        "server never came up on port {port}"
-    );
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
     assert_eq!(http_get_status(port, "/"), Some(200));
     assert_eq!(http_get_status(port, "/assets/index.js"), Some(200));
     assert_eq!(http_get_status(port, "/assets/index.css"), Some(200));
@@ -174,9 +234,7 @@ fn default_bind_serves_200() {
 
 #[test]
 fn core_wasm_has_wasm_content_type() {
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     write!(
         stream,
@@ -267,9 +325,9 @@ fn occupied_port_fails_cleanly_naming_the_port() {
 
 #[test]
 fn binding_to_all_interfaces_warns_before_the_banner() {
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &["--host", "0.0.0.0"]);
-    wait_until_serving(port, Duration::from_secs(5));
+    let (mut child, _port) = spawn_with_retry(Duration::from_secs(5), |p| {
+        spawn_stdin_mode(p, &["--host", "0.0.0.0"])
+    });
     let (stdout, _) = read_all_nonblocking(&mut child, Duration::from_millis(100));
     let warn_idx = stdout.find("WARNING").expect("exposure warning printed");
     let banner_idx = stdout.find("looqlog v").expect("banner printed");
@@ -282,9 +340,7 @@ fn binding_to_all_interfaces_warns_before_the_banner() {
 
 #[test]
 fn loopback_bind_stays_quiet() {
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    wait_until_serving(port, Duration::from_secs(5));
+    let (mut child, _port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
     let (stdout, _) = read_all_nonblocking(&mut child, Duration::from_millis(100));
     assert!(
         !stdout.contains("WARNING"),
@@ -297,12 +353,9 @@ fn loopback_bind_stays_quiet() {
 #[cfg(target_os = "macos")]
 #[test]
 fn nonexistent_path_still_starts_and_warns() {
-    let port = free_port();
-    let mut child = spawn_pty_file_mode(port, &["does-not-exist-12345.log"]);
-    assert!(
-        wait_until_serving(port, Duration::from_secs(5)),
-        "server should still start for a nonexistent path"
-    );
+    let (mut child, _port) = spawn_with_retry(Duration::from_secs(5), |p| {
+        spawn_pty_file_mode(p, &["does-not-exist-12345.log"])
+    });
     let _ = child.kill();
     // Under `script(1)`, the child's stdout and stderr are both written to the
     // pseudo-terminal and mirrored onto `script`'s own stdout, not kept as separate
@@ -317,18 +370,17 @@ fn nonexistent_path_still_starts_and_warns() {
 #[cfg(target_os = "macos")]
 #[test]
 fn max_lines_note_printed_in_file_mode_but_not_by_default() {
-    let port = free_port();
-    let mut child = spawn_pty_file_mode(port, &["--max-lines", "5"]);
-    wait_until_serving(port, Duration::from_secs(5));
+    let (mut child, _port) = spawn_with_retry(Duration::from_secs(5), |p| {
+        spawn_pty_file_mode(p, &["--max-lines", "5"])
+    });
     let (stdout, _) = read_all_nonblocking(&mut child, Duration::from_millis(100));
     assert!(
         stdout.contains("--max-lines has no effect in file mode"),
         "expected the no-op note:\n{stdout}"
     );
 
-    let port2 = free_port();
-    let mut child2 = spawn_pty_file_mode(port2, &[]);
-    wait_until_serving(port2, Duration::from_secs(5));
+    let (mut child2, _port2) =
+        spawn_with_retry(Duration::from_secs(5), |p| spawn_pty_file_mode(p, &[]));
     let (stdout2, _) = read_all_nonblocking(&mut child2, Duration::from_millis(100));
     assert!(
         !stdout2.contains("--max-lines"),
@@ -369,9 +421,7 @@ fn source_never_opens_or_reads_the_positional_path() {
 async fn snapshot_then_lines_delivered_in_order_to_multiple_clients() {
     use futures_channel_free_ws::{connect_ws, WsMsg};
 
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let (mut a, mut b) = (connect_ws(port).await, connect_ws(port).await);
 
@@ -407,9 +457,7 @@ async fn snapshot_then_lines_delivered_in_order_to_multiple_clients() {
 async fn eof_sends_ended_message_then_closes_the_socket_and_server_stays_alive() {
     use futures_channel_free_ws::{connect_ws, WsMsg};
 
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let mut client = connect_ws(port).await;
     assert!(matches!(
@@ -451,9 +499,7 @@ async fn eof_sends_ended_message_then_closes_the_socket_and_server_stays_alive()
 async fn connecting_after_stdin_already_closed_still_gets_ended() {
     use futures_channel_free_ws::{connect_ws, WsMsg};
 
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let mut stdin = child.stdin.take().unwrap();
     writeln!(stdin, "only line").unwrap();
@@ -486,9 +532,7 @@ async fn connecting_after_stdin_already_closed_still_gets_ended() {
 async fn late_connection_sees_buffered_history_in_the_snapshot() {
     use futures_channel_free_ws::{connect_ws, WsMsg};
 
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let mut stdin = child.stdin.take().unwrap();
     writeln!(stdin, "before").unwrap();
@@ -523,9 +567,9 @@ async fn late_connection_sees_buffered_history_in_the_snapshot() {
 async fn reload_mid_stream_snapshot_matches_lines_seen_so_far() {
     use futures_channel_free_ws::{connect_ws, WsMsg};
 
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &["--max-lines", "50"]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| {
+        spawn_stdin_mode(p, &["--max-lines", "50"])
+    });
 
     let mut stdin = child.stdin.take().unwrap();
     for i in 0..10 {
@@ -560,10 +604,10 @@ async fn reload_mid_stream_snapshot_matches_lines_seen_so_far() {
 #[cfg(target_os = "macos")]
 #[test]
 fn process_memory_stays_bounded_over_ten_times_max_lines() {
-    let port = free_port();
     let max_lines = 2_000;
-    let mut child = spawn_stdin_mode(port, &["--max-lines", &max_lines.to_string()]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, _port) = spawn_with_retry(Duration::from_secs(5), |p| {
+        spawn_stdin_mode(p, &["--max-lines", &max_lines.to_string()])
+    });
 
     let pid = child.id();
     let rss_kb = |pid: u32| -> Option<u64> {
@@ -616,9 +660,9 @@ fn process_memory_stays_bounded_over_ten_times_max_lines() {
 async fn fast_producer_slow_consumer_never_blocks_and_reports_an_accurate_gap() {
     use futures_channel_free_ws::connect_ws;
 
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &["--max-lines", "100000"]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| {
+        spawn_stdin_mode(p, &["--max-lines", "100000"])
+    });
 
     let mut slow_client = connect_ws(port).await;
     // Consume only the initial (empty) snapshot, then stop reading entirely — the
@@ -696,10 +740,10 @@ async fn fast_producer_slow_consumer_never_blocks_and_reports_an_accurate_gap() 
 async fn snapshot_at_default_max_lines_is_delivered_promptly() {
     use futures_channel_free_ws::{connect_ws, WsMsg};
 
-    let port = free_port();
     let max_lines = 100_000;
-    let mut child = spawn_stdin_mode(port, &["--max-lines", &max_lines.to_string()]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| {
+        spawn_stdin_mode(p, &["--max-lines", &max_lines.to_string()])
+    });
 
     let mut stdin = child.stdin.take().unwrap();
     // Representative line: JSON-ish, ~110 bytes, similar to a real structured log line.
@@ -750,9 +794,7 @@ async fn snapshot_at_default_max_lines_is_delivered_promptly() {
 
 #[test]
 fn producer_is_not_blocked_by_a_missing_client() {
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let mut stdin = child.stdin.take().unwrap();
     let start = Instant::now();
@@ -778,9 +820,12 @@ fn producer_is_not_blocked_by_a_missing_client() {
 #[cfg(unix)]
 #[test]
 fn ctrl_c_exits_zero_within_one_second_and_releases_the_port() {
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    // `spawn_with_retry` only retries the "did the server come up" step; by the
+    // time it returns, `port` is confirmed serving. The assertion this test exists
+    // for — that the port is free again after SIGINT — runs afterward as its own,
+    // separate check below, so a retry here cannot mask a genuine port-release
+    // regression.
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let pid = child.id();
     Command::new("kill")
@@ -812,9 +857,7 @@ fn ctrl_c_exits_zero_within_one_second_and_releases_the_port() {
 
 #[test]
 fn every_response_carries_the_csp_header() {
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
@@ -864,9 +907,7 @@ fn every_response_carries_the_csp_header() {
 /// material `web/src/token.ts` reads and `/ws`'s auth handshake checks against.
 #[test]
 fn served_page_embeds_a_nonempty_per_process_token() {
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
@@ -906,9 +947,7 @@ fn served_page_embeds_a_nonempty_per_process_token() {
 /// therefore before any stdin data could possibly be sent.
 #[tokio::test]
 async fn cross_origin_websocket_upgrade_is_rejected() {
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
@@ -942,9 +981,7 @@ async fn cross_origin_websocket_upgrade_is_rejected() {
 /// negative case, not just an unconditional refusal.
 #[tokio::test]
 async fn same_origin_websocket_upgrade_succeeds() {
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
@@ -977,9 +1014,7 @@ async fn websocket_connection_without_a_token_is_closed_without_data() {
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::Message;
 
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let url = format!("ws://127.0.0.1:{port}/ws");
     let (mut ws, _) = tokio_tungstenite::connect_async(url)
@@ -1013,9 +1048,7 @@ async fn websocket_connection_with_wrong_token_is_closed_without_data() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    let port = free_port();
-    let mut child = spawn_stdin_mode(port, &[]);
-    assert!(wait_until_serving(port, Duration::from_secs(5)));
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
 
     let url = format!("ws://127.0.0.1:{port}/ws");
     let (mut ws, _) = tokio_tungstenite::connect_async(url)
