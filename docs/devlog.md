@@ -2824,6 +2824,82 @@ moved — a force operation over an already-published tag, cheap only because th
 minutes old and unannounced. And the staleness job caught a real diff that I still cannot
 explain.
 
+## 2026-08-23 — `prefix-beats-logfmt-detection`: the most common shape was the one we read wrong
+
+Found while generating a demo log for the landing page: the first shape reached for —
+`<ISO timestamp> <LEVEL> service=x msg="…" key=value` — came back with no timestamp and no
+level on every entry, and the timeline rendered "No entries have a usable timestamp". Root
+cause: `detect()` in `crates/looqlog-core/src/detect.rs` walked JSON → logfmt → plain in
+order and returned as soon as a candidate crossed the 80% threshold. `logfmt::matches` is
+satisfied by the trailing `key=value` pairs alone, so the function returned `Format::Logfmt`
+before `prefix_evidence` (the plain-text prefix scanner) ever ran — and logfmt looks for
+`ts=`/`time=` and `level=` as *keys*, which this shape doesn't have; the timestamp is a bare
+leading token and the level is positional.
+
+Fix: compute `prefix_evidence` before the logfmt branch decides, and make the logfmt return
+conditional on `logfmt_fraction >= THRESHOLD && prefix_fraction < THRESHOLD`. When both cross
+the threshold, plain wins — it extracts the timestamp and the positional level, then hands
+the remainder to the same logfmt parser through `dispatch_payload`, so every field logfmt
+would have found is still found, plus the two it would have dropped. JSON's precedence is
+untouched; it still returns before either fraction is computed.
+
+The worry going in was whether this would pull genuine logfmt files into plain. Measured
+before writing the fix, on the four shapes that matter:
+
+| sampled line | `logfmt::matches` | `prefix_shape` |
+|---|---|---|
+| `2026-08-20T14:02:00.371Z INFO service=api msg="x" status=200` | true | `Some((Iso, 0))` |
+| `ts=2026-08-20T14:02:00Z level=info msg="x" service=api` | true | `None` |
+| `time=2026-08-20T14:02:00Z level=info msg="x" svc=api` | true | `None` |
+| `level=info msg="x" service=api status=200` | true | `None` |
+
+`timestamp::extract_leading` requires a token boundary before a candidate timestamp, and
+`ts=`/`time=` don't supply one — a logfmt line carrying its timestamp *as a value* yields no
+prefix at all. So "logfmt matched **and** a prefix matched" already separates real logfmt
+from this shape, with no offset rule needed. An earlier draft of the design added "…and the
+modal prefix offset is 0" as a second condition, on the assumption `ts=2026-…` would match at
+offset 3; the table above shows it matches at no offset, so that condition would have been
+dead weight guarding a case that cannot arise — left out on purpose.
+
+Verified against the real binary, not just `cargo test`: the defect was "timeline renders
+blank", which a green test suite wouldn't have caught by itself. Built the release binary,
+generated a 200-line log in this shape (INFO/WARN/ERROR/DEBUG mixed, `service`/`msg`/`status`/
+`duration_ms` pairs), opened it through the actual file-picker flow in a real browser via
+Playwright. Detection panel reported `plain (100%)`, the timeline drew all 200 entries across
+the correct 2.5-minute window, and the level chips populated (DEBUG 51, INFO 52, WARN 38,
+ERROR 59) — the exact failure the change exists to fix, now fixed.
+
+```
+cargo test --workspace   → 215 passed, 0 failed (208 before this change + 7 new)
+cargo clippy --all-targets → clean
+cargo fmt --check          → clean
+cargo bench -p looqlog-core → all 4 groups "No change in performance detected"
+  parse_1mb/json              74.2ms  (+1.2%, not significant)
+  parse_1mb/logfmt           100.4ms  (+1.0%, not significant)
+  parse_1mb/plain            122.6ms  (+0.8%, not significant)
+  parse_1mb/plain_mixed_shapes 146.7ms (+0.04%, not significant)
+```
+
+That bench run proves less than it looks like it does, and the gap is worth stating: all four
+benchmarks force their format (`Parser::new(Some(format), …)`), which sends the parser straight
+to `State::Active` and skips `detect()` entirely. So the suite is green on code this change
+never touched, and it measures nothing about `prefix_evidence` now also running on
+logfmt-shaped samples. Design D3 asserted the extra pass was negligible; asserting is not
+measuring.
+
+Measured directly instead of adding bench infrastructure for a once-per-input call — 2,000
+iterations of the whole of `detect()` over a 100-line sample, release build:
+
+```
+logfmt sample (prefix_evidence now runs where it used to return early)   71.8 µs
+ISO + level + pairs (the new tie-break path)                             48.2 µs
+```
+
+That is the entire cost of detection, not just the added part, and it is paid once per input
+regardless of size. Against ~80 ms/MB of parsing it is 0.09% of a single megabyte, and 0.0004%
+of a 200 MB file. No benchmark added: a fixed 72 µs cannot regress anything measurable, and a
+criterion group guarding it would be permanent upkeep for a number that cannot move.
+
 ## Ideas for later
 
 - The 216,854-byte `core.wasm` from the rename work is unexplained (entry above). If the

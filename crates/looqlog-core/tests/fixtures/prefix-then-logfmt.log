@@ -1,0 +1,10 @@
+2026-08-20T14:02:00.371Z INFO service=api msg="request completed" status=200 duration_ms=23
+2026-08-20T14:02:01.118Z WARN service=api msg="slow query detected" duration_ms=812
+2026-08-20T14:02:02.004Z ERROR service=db msg="connection refused" retries=3
+2026-08-20T14:02:03.556Z DEBUG service=worker msg="job dequeued" queue=default
+2026-08-20T14:02:04.201Z INFO service=auth msg="token issued" user_id=42 ttl_s=3600
+2026-08-20T14:02:05.877Z WARN service=cache msg="cache miss" key=session:42
+2026-08-20T14:02:06.339Z ERROR service=api msg="request failed" status=500 duration_ms=15
+2026-08-20T14:02:07.902Z INFO service=worker msg="job completed" queue=default duration_ms=203
+2026-08-20T14:02:08.445Z DEBUG service=db msg="query planned" rows=128
+2026-08-20T14:02:09.010Z INFO service=api msg="request completed" status=200 duration_ms=9

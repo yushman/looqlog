@@ -1,7 +1,10 @@
 //! Format auto-detection (format-detection spec, design.md D3). Samples at most the
 //! first 100 non-empty lines and evaluates candidates in TDR §8 priority order —
 //! JSON, then logfmt — selecting the first to cross an 80% match threshold; plain
-//! text is the fallback, never rejected.
+//! text is the fallback, never rejected. Since `prefix-beats-logfmt-detection`, a
+//! logfmt win is yielded to plain text when the prefix scanner also crosses the
+//! threshold (design.md D1/D2 of that change): plain extracts strictly more from
+//! those lines than logfmt does.
 
 use crate::format::Format;
 use crate::parsers::{json, logfmt};
@@ -107,7 +110,22 @@ pub fn detect(sample: &[&str], ctx: &ParseContext) -> DetectionResult {
     }
 
     let logfmt_fraction = fraction_matching(Format::Logfmt, sample);
-    if logfmt_fraction >= THRESHOLD {
+    // Computed here, ahead of the logfmt branch, because the logfmt decision now
+    // depends on it (design.md D1/D2): a line shaped `<ISO> <LEVEL> key=value` matches
+    // logfmt's key=value scan too, but plain text gets strictly more out of it — the
+    // leading timestamp and the positional level, plus every field logfmt would have
+    // found, via `dispatch_payload`. So when both cross the threshold, plain wins the
+    // tie rather than logfmt returning first.
+    let (prefix_fraction, choice) = prefix_evidence(sample, ctx);
+
+    // Genuine logfmt is not pulled into this tie: `ts=`/`time=` carry the timestamp as
+    // a value, which gives the prefix scanner no token boundary to match against, so
+    // `logfmt_fraction` and `prefix_fraction` crossing the threshold together does not
+    // happen on real logfmt input (design.md D2, measured on four shapes). Do not add
+    // an offset check here — a prior draft did, on the assumption `ts=2026-…` would
+    // match at a nonzero offset; measurement showed it matches at no offset at all, so
+    // the extra condition would be dead weight.
+    if logfmt_fraction >= THRESHOLD && prefix_fraction < THRESHOLD {
         return DetectionResult {
             format: Format::Logfmt,
             match_fraction: logfmt_fraction,
@@ -120,17 +138,24 @@ pub fn detect(sample: &[&str], ctx: &ParseContext) -> DetectionResult {
     // Plain text is never rejected, but it is no longer automatically a *fallback*:
     // a file of syslog or access-log lines whose prefixes all parse is a match on its
     // own terms (design.md D9).
-    let (prefix_fraction, choice) = prefix_evidence(sample, ctx);
     let outcome = if prefix_fraction >= THRESHOLD {
         DetectionOutcome::Threshold
     } else {
         DetectionOutcome::Fallback
     };
-    DetectionResult {
-        format: Format::Plain,
+    let match_fraction = if logfmt_fraction >= THRESHOLD {
+        // Reached only via the tie-break above: logfmt also crossed the threshold, but
+        // plain is the format actually reported, so the evidence shown is its own
+        // (design.md D4) rather than logfmt's higher-looking number.
+        prefix_fraction
+    } else {
         // Evidence for the best candidate seen, whichever it was — with plain text
         // winning on the threshold, that is `prefix_fraction` by construction.
-        match_fraction: json_fraction.max(logfmt_fraction).max(prefix_fraction),
+        json_fraction.max(logfmt_fraction).max(prefix_fraction)
+    };
+    DetectionResult {
+        format: Format::Plain,
+        match_fraction,
         outcome,
         timestamp_shape: choice.map(|(shape, _)| shape),
         timestamp_offset: choice.map(|(_, offset)| offset),
@@ -257,5 +282,66 @@ mod tests {
         lines.extend(vec!["2026-08-08T17:42:01Z the rest of the file"; 20]);
         let result = detect(&lines, &ctx());
         assert_eq!(result.timestamp_shape, Some(TimestampShape::Iso));
+    }
+
+    // --- prefix-beats-logfmt-detection (tasks 2.1-2.4) -----------------------
+
+    /// The shape the proposal exists for: both `logfmt::matches` and `prefix_shape`
+    /// cross the threshold, and plain wins (design.md D1).
+    #[test]
+    fn iso_prefix_with_logfmt_pairs_selects_plain_not_logfmt() {
+        let lines: Vec<&str> = vec![
+            "2026-08-20T14:02:00.371Z INFO service=api msg=\"request completed\" status=200";
+            90
+        ];
+        let result = detect(&lines, &ctx());
+        assert_eq!(result.format, Format::Plain);
+        assert_eq!(result.outcome, DetectionOutcome::Threshold);
+        assert_eq!(result.timestamp_shape, Some(TimestampShape::Iso));
+        assert_eq!(result.timestamp_offset, Some(0));
+    }
+
+    /// Regression guard for design.md D2: a genuine logfmt line carries its timestamp
+    /// as a `ts=` value, which gives the prefix scanner no token boundary, so it stays
+    /// logfmt even though this change now checks prefix evidence on every logfmt-shaped
+    /// sample.
+    #[test]
+    fn logfmt_with_ts_key_stays_logfmt() {
+        let lines: Vec<&str> = vec!["ts=2026-08-20T14:02:00Z level=info msg=\"x\" service=api"; 90];
+        let result = detect(&lines, &ctx());
+        assert_eq!(result.format, Format::Logfmt);
+        assert_eq!(result.outcome, DetectionOutcome::Threshold);
+    }
+
+    /// Same guard, `time=` key (design.md D2 table).
+    #[test]
+    fn logfmt_with_time_key_stays_logfmt() {
+        let lines: Vec<&str> = vec!["time=2026-08-20T14:02:00Z level=info msg=\"x\" svc=api"; 90];
+        let result = detect(&lines, &ctx());
+        assert_eq!(result.format, Format::Logfmt);
+        assert_eq!(result.outcome, DetectionOutcome::Threshold);
+    }
+
+    /// Same guard, no timestamp at all (design.md D2 table).
+    #[test]
+    fn logfmt_with_no_timestamp_stays_logfmt() {
+        let lines: Vec<&str> = vec!["level=info msg=\"x\" service=api status=200"; 90];
+        let result = detect(&lines, &ctx());
+        assert_eq!(result.format, Format::Logfmt);
+        assert_eq!(result.outcome, DetectionOutcome::Threshold);
+    }
+
+    /// JSON still wins over a sample that would also satisfy both logfmt and the
+    /// prefix scanner, because the JSON branch runs and returns before either is
+    /// computed (design.md D3: evaluation order changes, priority order does not).
+    #[test]
+    fn json_still_wins_over_a_sample_that_would_also_match_logfmt_and_prefix() {
+        let lines: Vec<&str> = vec![
+            r#"{"ts":"2026-08-20T14:02:00Z","level":"info","service":"api","status":200}"#;
+            90
+        ];
+        let result = detect(&lines, &ctx());
+        assert_eq!(result.format, Format::Json);
+        assert_eq!(result.outcome, DetectionOutcome::Threshold);
     }
 }

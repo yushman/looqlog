@@ -665,6 +665,74 @@ fn payload_fixture_covers_dispatch_conflict_and_the_non_malformed_failure() {
 }
 
 // ---------------------------------------------------------------------------
+// prefix-beats-logfmt-detection tasks 3.2-3.4: `<ISO> <LEVEL> key=value key=value`
+// crosses the threshold for both logfmt and the prefix scanner, and plain wins
+// (design.md D1/D2) — the whole point being that timestamp, level and payload fields
+// all survive on the same entry, which logfmt alone would have dropped the first two
+// of.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prefix_then_logfmt_fixture_auto_detects_as_plain_with_every_field() {
+    let (entries, parser) = parse_fixture_auto("prefix-then-logfmt.log");
+    let detection = parser.detection().unwrap();
+    assert_eq!(detection.format, Format::Plain);
+    assert_eq!(detection.outcome, looqlog_core::DetectionOutcome::Threshold);
+    assert_eq!(
+        detection.timestamp_shape,
+        Some(looqlog_core::TimestampShape::Iso)
+    );
+    assert_eq!(detection.timestamp_offset, Some(0));
+    assert_eq!(entries.len(), 10);
+
+    // Timestamp, level and payload fields all present on the same entry — the
+    // defect this change exists to fix.
+    let first = &entries[0];
+    assert_eq!(
+        first.timestamp.unwrap().to_rfc3339(),
+        "2026-08-20T14:02:00.371+00:00"
+    );
+    assert_eq!(first.level, Some(Level::Info));
+    assert_eq!(first.message, "request completed");
+    assert_eq!(
+        first.fields.get("service"),
+        Some(&FieldValue::String("api".to_string()))
+    );
+    assert_eq!(
+        first.fields.get("status"),
+        Some(&FieldValue::String("200".to_string()))
+    );
+    assert_eq!(
+        first.fields.get("duration_ms"),
+        Some(&FieldValue::String("23".to_string()))
+    );
+
+    assert!(entries.iter().all(|e| e.timestamp.is_some()));
+    assert!(entries.iter().all(|e| e.level.is_some()));
+    assert_eq!(parser.diagnostics().total(), 0);
+    assert_eq!(
+        entries.len() + parser.diagnostics().total() + parser.blank_lines(),
+        parser.total_lines()
+    );
+}
+
+#[test]
+fn prefix_then_logfmt_fixture_forced_logfmt_keeps_old_behaviour() {
+    // design.md D4's escape hatch: an explicit #format=logfmt override skips
+    // detection entirely, so the pre-change parse is still reachable by name.
+    let data = fixture("prefix-then-logfmt.log");
+    let entries = parse_whole(&data, Some(Format::Logfmt));
+    assert_eq!(entries.len(), 10);
+    assert!(entries.iter().all(|e| e.timestamp.is_none()));
+    assert!(entries.iter().all(|e| e.level.is_none()));
+    // The pairs still parse as fields even though timestamp/level are lost.
+    assert_eq!(
+        entries[0].fields.get("service"),
+        Some(&FieldValue::String("api".to_string()))
+    );
+}
+
+// ---------------------------------------------------------------------------
 // logcat-and-payload-precision tasks 2.6 / 3.x / 6.3: the logcat shape through a
 // whole file, and the bugreport case where detection's 100-line sample sees only
 // the unstructured preamble and no sticky hint is ever available.
