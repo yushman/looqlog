@@ -53,7 +53,7 @@ fi
 
 # rustc is also an input to the diffed bytes — same reasoning as binaryen above.
 # CI pins this version in the frontend-artifact-staleness job; warn loudly here too.
-EXPECTED_RUSTC=1.97.1
+EXPECTED_RUSTC=1.98.0
 have_rustc=$(rustc --version | awk '{print $2}')
 if [ "$have_rustc" != "$EXPECTED_RUSTC" ]; then
   echo "warning: rustc version $have_rustc, expected $EXPECTED_RUSTC — the rebuilt" >&2

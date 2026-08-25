@@ -89,7 +89,7 @@ jobs:
       # stay on @stable so a new release still turns those red instead of silently
       # doing nothing. The other copy of this number is `EXPECTED_RUSTC` in
       # scripts/build-frontend.sh.
-      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: wasm32-unknown-unknown
       - uses: actions/setup-node@v5

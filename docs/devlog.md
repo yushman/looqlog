@@ -3005,6 +3005,37 @@ clean. `for i in $(seq 1 10); do cargo test -p looqlog --test cli || echo "FAILE
 cross-process half (that needs another process actually racing for the port), but confirms the
 intra-process fix holds and nothing else broke.
 
+## 2026-08-26 — bump the pinned rustc to 1.98.0: the addendum's open question, answered
+
+Bumped `frontend-artifact-staleness`'s pin: `EXPECTED_RUSTC=1.97.1` → `1.98.0` in
+`scripts/build-frontend.sh`, `dtolnay/rust-toolchain@1.97.1` → `@1.98.0` in `ci.yml`, that job only. `rustup update stable`: `rustc 1.97.1 (8bab26f4f 2026-07-14)` → `1.98.0 (88d9e12ae
+2026-08-18)`, matching the channel. `wasm-pack --version` and `wasm-opt --version` untouched:
+`0.15.0`/`132`.
+
+`./scripts/build-frontend.sh`: no warnings — the `EXPECTED_RUSTC` check confirming itself. `git diff
+--stat -- crates/looqlog/assets/`: only `wasm/core.wasm | Bin 216885 -> 217102 bytes` moved, +217
+bytes; `index.js`/`index.css`/`worker.js` untouched — vite doesn't see rustc.
+
+This answers, and supersedes, the question the 2026-08-26 addendum to the second entry (three above)
+deliberately left open — "whether 1.98.0 actually produces different `core.wasm` bytes is untested and
+deliberately stays that way." It does: +217 bytes, most likely stdlib/wasm-bindgen codegen drift
+between rustc releases, not investigated further, since the fix for a toolchain bump is the same
+rebuild-and-commit regardless of the reason the bytes moved.
+
+Reproducibility: ran the script twice; `cmp` between the two `core.wasm` outputs reported no
+differences, `md5` matched on both (`894fad2656fe3597f5faad4a7d23cf3f`).
+
+Leak check on the rebuilt binary: `strings -a crates/looqlog/assets/wasm/core.wasm | grep -c
+"/Users/"` → 0; same for the builder username and for `/home/`; no `producers` custom-section string
+present. `--remap-path-prefix` still holds on 1.98.0.
+
+`cargo fmt --all -- --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+`cargo test --workspace`: 215 passed, 0 failed (19 + 27 + 119 + 50, plus three empty doc-test/unit
+suites).
+
+Pin and artifact left staged together for one commit — the workflow design D1-D3 built the pin to
+force, rather than a pin bump landing separately from the rebuild it obligates.
+
 ## Ideas for later
 
 - The 216,854-byte `core.wasm` from the rename work is unexplained (entry above). If the
