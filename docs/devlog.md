@@ -2950,6 +2950,26 @@ doc-test/unit suites). No README change: nothing about install steps, commands, 
 limitations changed — this change only touched CI configuration, the local build script's warnings,
 and the vendored artifact's freshness guarantee.
 
+**Added 2026-08-26, after the first real CI run — the entry above predicted a failure that was
+already overdue.** Run `32649013905` on `7892815` came back green on all eight jobs,
+`frontend-artifact-staleness` among them at 111s: the pinned macOS rebuild matched the committed
+`crates/looqlog/assets/` byte for byte. What the entry got wrong was the tense. It said "the next
+stable release will fail the staleness job on somebody's unrelated push", but
+`https://static.rust-lang.org/dist/channel-rust-stable.toml` reads `1.98.0 (88d9e12ae 2026-08-18)`
+with `date = "2026-08-20"` — stable had already moved three days *before* the 2026-08-23 push. The
+window was open the whole time this change was being written; nobody happened to push into it. So
+the pin was load-bearing on its first run rather than preventive, and `dtolnay/rust-toolchain@stable`
+in that job would have installed 1.98.0 that same afternoon.
+
+Whether 1.98.0 actually produces different `core.wasm` bytes is untested and deliberately stays that
+way — removing the question from the critical path is the whole point of the pin, and answering it
+changes nothing, since any toolchain bump has to rebuild the artifact in the same commit regardless.
+`test` and `clippy` did run on unpinned stable — 1.98.0 — and passed, so the code itself is fine on
+the new compiler; any divergence would be codegen only.
+
+Two bumps in this change remain unexercised: `pages.yml` is path-filtered to `site/**` and did not
+run, and `release.yml` runs only on a `v*` tag. Both see their first real run at the next release.
+
 ## 2026-08-23 (third entry) — closing the `free_port()` TOCTOU: two races, two different fixes
 
 Fixed the flake flagged twice above (`crates/looqlog/tests/cli.rs`, on the Ideas list). Two distinct
