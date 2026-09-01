@@ -41,22 +41,22 @@ live-потока из stdin. Парсинг происходит в WebAssembly
 
 ## Установка
 
-Скачайте готовый бинарь со [страницы Releases](https://github.com/yushman/looqlog/releases/latest)
-под свою платформу:
-
 ```bash
-# Linux x86_64 (статически слинкован, работает на любом дистрибутиве)
-curl -LO https://github.com/yushman/looqlog/releases/latest/download/looqlog-0.1.0-x86_64-unknown-linux-musl
-chmod +x looqlog-0.1.0-x86_64-unknown-linux-musl
-./looqlog-0.1.0-x86_64-unknown-linux-musl --version
+cargo install looqlog
+looqlog --version
 ```
 
-Также публикуются сборки для `aarch64-apple-darwin`, `x86_64-apple-darwin` и
-`x86_64-pc-windows-msvc`. Каждый артефакт проходит автоматический smoke-тест на
-своей платформе перед публикацией — см. «Какие платформы проверены как» ниже.
+Ставится текущий релиз `0.2.0` с
+[crates.io](https://crates.io/crates/looqlog), и кроме Rust toolchain ничего не нужно.
 
-`cargo install looqlog` запланирован, но ещё не опубликован — публикация в crates.io
-необратима и требует токена мейнтейнера, так что походя её не делают.
+**Готовые бинари отстают на релиз и лежат под старым именем.** На
+[странице Releases](https://github.com/yushman/looqlog/releases/latest) сейчас есть
+только `v0.1.0`, и его артефакты называются `looq-0.1.0-<target>` — этот релиз вышел до
+переименования в `looqlog`. Скачать `v0.2.0` негде, так что `cargo install` — единственный
+способ получить актуальную версию. Бинари `v0.1.0` собраны для
+`x86_64-unknown-linux-musl`, `aarch64-apple-darwin`, `x86_64-apple-darwin` и
+`x86_64-pc-windows-msvc`, каждый проходит автоматический smoke-тест на своей платформе
+перед публикацией — см. «Какие платформы проверены как» ниже.
 
 > **Если вы уже установили `v0.1.0`:** тот релиз выпускал бинарь с именем `looq`.
 > Проект и все релизы начиная с этого — под именем `looqlog`; прямого пути
