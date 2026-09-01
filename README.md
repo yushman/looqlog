@@ -47,14 +47,24 @@ looqlog --version
 This installs the current release, `0.2.0`, from
 [crates.io](https://crates.io/crates/looqlog), and needs nothing but a Rust toolchain.
 
-**Prebuilt binaries are one release behind and carry the old name.** The
-[Releases page](https://github.com/yushman/looqlog/releases/latest) currently offers
-`v0.1.0` only, whose assets are named `looq-0.1.0-<target>` — that release predates the
-rename to `looqlog`. There is no `v0.2.0` download, so `cargo install` is the only way to
-get the current version. `v0.1.0` binaries are published for
-`x86_64-unknown-linux-musl`, `aarch64-apple-darwin`, `x86_64-apple-darwin` and
-`x86_64-pc-windows-msvc`, each smoke-tested on its own platform before publication — see
-"Which platforms are verified how" below.
+Or take a prebuilt binary, which needs no Rust at all:
+
+```bash
+# Linux x86_64, statically linked against musl
+curl -LO https://github.com/yushman/looqlog/releases/download/v0.2.0/looqlog-0.2.0-x86_64-unknown-linux-musl
+chmod +x looqlog-0.2.0-x86_64-unknown-linux-musl
+./looqlog-0.2.0-x86_64-unknown-linux-musl --version
+```
+
+Also built for `aarch64-apple-darwin`, `x86_64-apple-darwin` and
+`x86_64-pc-windows-msvc`. Every asset is smoke-tested on its own platform before being
+published — see "Which platforms are verified how" below for what that does and does not
+prove.
+
+The URL above is pinned to `v0.2.0` on purpose: asset names carry the version, so a
+`releases/latest/download/` link breaks the moment a newer release exists. For any later
+version, take the file name from the
+[Releases page](https://github.com/yushman/looqlog/releases/latest).
 
 > **If you already installed `v0.1.0`:** that release shipped a binary named `looq`.
 > The project and every release from here on are named `looqlog`; there is no
