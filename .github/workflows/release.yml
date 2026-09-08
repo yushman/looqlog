@@ -172,3 +172,80 @@ jobs:
           name: looqlog ${{ needs.check-version.outputs.version }}
           body_path: release-body.md
           files: release-assets/*
+
+      # 2026-09-01 devlog entry: this workflow reported success against v0.2.0 twice —
+      # two green runs, on two separate days — and no release existed for twelve days.
+      # `releases/latest` kept resolving to v0.1.0 and `releases/tags/v0.2.0` returned
+      # `Not Found` the whole time; both READMEs meanwhile told readers to `curl` an
+      # asset name that 404'd. A green job here only proves the steps above exited
+      # zero, not that a release exists. This step asks the API directly.
+      - name: Verify the release exists and carries the uploaded assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          REPO="${{ github.repository }}"
+
+          # design D2: only a 404 is retryable — the release was just created and the
+          # REST API is read-after-write eventually consistent, so an immediate query
+          # can race the write. Any other failure (auth, rate limit) is real and must
+          # fail now rather than spend the retry budget on something that will never
+          # resolve on its own.
+          RELEASE=""
+          for attempt in 1 2 3 4 5; do
+            set +e
+            BODY="$(gh api "repos/${REPO}/releases/tags/${TAG}" 2>/dev/null)"
+            CODE=$?
+            set -e
+            if [ "$CODE" -eq 0 ]; then
+              RELEASE="$BODY"
+              break
+            fi
+            if [ "$(echo "$BODY" | jq -r '.status // empty')" != "404" ]; then
+              echo "::error::querying the release for tag ${TAG} failed with something other than a missing release: $(echo "$BODY" | jq -r '.message // "unknown error"')"
+              exit 1
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::no release exists for tag ${TAG} after 5 attempts — every publishing step above exited zero but nothing was published"
+              exit 1
+            fi
+            sleep 3
+          done
+
+          # design D3: checked even though `release.yml` passes no `draft` input and
+          # action-gh-release publishes by default, so this "should" be unreachable —
+          # "should be unreachable" is exactly what was assumed about a release
+          # existing at all before the 2026-09-01 incident. A draft satisfies "the
+          # release exists" while satisfying none of what a user following the
+          # install instructions needs.
+          if [ "$(echo "$RELEASE" | jq -r '.draft')" = "true" ]; then
+            echo "::error::release for tag ${TAG} exists but is a draft — not reachable by anyone following the install instructions"
+            exit 1
+          fi
+
+          # design D1: compare against release-assets/, the directory this run
+          # actually built the release from — not names recomputed from the target
+          # matrix. Recomputing would repeat the exact naming expression that
+          # produced the 2026-09-01 mismatch (looq-* vs looqlog-*) and agree with
+          # itself even if that expression is wrong again.
+          EXPECTED="$(find release-assets -type f -exec basename {} \; | sort)"
+          ACTUAL="$(echo "$RELEASE" | jq -r '.assets[].name' | sort)"
+
+          MISSING="$(comm -23 <(echo "$EXPECTED") <(echo "$ACTUAL"))"
+          UNEXPECTED="$(comm -13 <(echo "$EXPECTED") <(echo "$ACTUAL"))"
+
+          if [ -n "$MISSING" ] || [ -n "$UNEXPECTED" ]; then
+            echo "::error::release ${TAG} does not carry exactly the assets this run uploaded"
+            while IFS= read -r name; do
+              [ -n "$name" ] && echo "::error::missing from the release: ${name} — uploaded by this run, absent from what the API reports"
+            done <<< "$MISSING"
+            while IFS= read -r name; do
+              [ -n "$name" ] && echo "::error::unexpected on the release: ${name} — on the release but not among this run's uploads"
+            done <<< "$UNEXPECTED"
+            exit 1
+          fi
+
+          COUNT="$(echo "$ACTUAL" | grep -c .)"
+          echo "confirmed: release '$(echo "$RELEASE" | jq -r '.name')' for tag ${TAG} carries ${COUNT} asset(s), matching release-assets/ exactly" | tee -a "$GITHUB_STEP_SUMMARY"

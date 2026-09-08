@@ -3108,14 +3108,66 @@ it reported success twice while that contract was unmet for twelve days. A green
 evidence that steps exited zero, not that the outcome exists — and the one check nobody had
 written was the cheapest of all: ask the API whether the release is there.
 
+## 2026-09-08 — `verify-release-outcome`: make the release workflow check its own outcome
+
+Direct follow-up to the 2026-09-01 entry above: the Release workflow reported success twice
+against `v0.2.0` while no release existed for twelve days, because nothing after
+`softprops/action-gh-release` asked the API whether the release was actually there.
+
+**What shipped:** a new step in `.github/workflows/release.yml`'s `publish` job,
+`Verify the release exists and carries the uploaded assets`, running right after
+`Create GitHub Release`. It queries `gh api repos/${{ github.repository }}/releases/tags/${{
+github.ref_name }}`, retrying up to 5 times (~3s apart) but only on a `404` — read-after-write
+lag, not a real failure — then fails the run if the release is a draft, or if the set of asset
+names on the release differs from `ls release-assets/` in either direction. Missing and
+unexpected names are both reported as `::error::` lines, one per name, readable without
+job-log access.
+
+**Why `release-assets/` and not the target matrix (design D1).** The obvious source of
+expected names is reconstructing `looqlog-<version>-<target>` per matrix entry — rejected,
+because that recomputes the exact naming expression from `Stage release asset` a second time
+in a second place. If that expression is ever wrong (as it effectively was pre-rename, when
+`v0.1.0`'s assets were `looq-*`), a check built from the same expression is wrong in the same
+way and passes. `release-assets/` is the directory the release was *actually* built from —
+comparing the API's list against `ls release-assets/` compares two different things, which is
+the comparison that can fail usefully.
+
+**Verification, honestly scoped.** The step's retry/draft/query logic cannot be exercised
+end-to-end without pushing a real `v*` tag — that is a genuine limitation of this change, not
+an oversight. What could be verified locally:
+
+- The set-comparison logic, extracted into a standalone script and run against three
+  hand-made cases (sets equal, one name missing, one name unexpected). All three produced the
+  expected exit status and `::error::` lines — full output is in this change's `tasks.md`
+  (task 4.2).
+- `gh api repos/yushman/looqlog/releases/tags/v0.2.0 --jq '.draft, ([.assets[].name] | sort |
+  join(","))'` against the real, already-published `v0.2.0` release: reported `false` and the
+  four `looqlog-0.2.0-*` names exactly as the step's `jq` paths expect.
+- `gh api repos/yushman/looqlog/releases/tags/v9.9.9` against a tag that has no release:
+  exits 1, and the response body carries `"status":"404"` — the exact field the retry loop
+  reads to distinguish "keep polling" from "fail now".
+- `gh` (2.98.0, authenticated) turned out to be installed on this machine, so both `gh`
+  invocations above ran for real rather than falling back to `curl`.
+
+The step itself — the retry loop actually retrying on a live 404, the draft check against a
+live draft, the full workflow running inside `publish` — is not proven by any of this and
+won't be until the next `v*` tag is pushed. That gap is stated here rather than papered over.
+
+**No README change.** The workflow's contract ("a `v*` tag publishes downloadable binaries")
+is unchanged — only the workflow's willingness to confirm that contract was met before
+reporting success. Nothing user-facing moved.
+
 ## Ideas for later
 
-- The release workflow reports success without verifying its own outcome. After
+- ~~The release workflow reports success without verifying its own outcome. After
   `softprops/action-gh-release` runs, a final step should query
   `/repos/:owner/:repo/releases/tags/$GITHUB_REF_NAME` and fail if the release is
   absent, is a draft, or carries fewer assets than the target matrix has entries. The
   2026-09-01 entry above is what its absence costs: two green runs, twelve days, and a
-  README that documented a 404.
+  README that documented a 404.~~ **Done, 2026-09-08.** See the `verify-release-outcome`
+  entry above — it compares against `release-assets/` by name, not a count against the
+  target matrix, because a count would not have caught the `looq-*` mismatch that caused
+  the incident.
 
 - The 216,854-byte `core.wasm` from the rename work is unexplained (entry above). If the
   staleness job fires again with no source change, capture the failing artifact and
