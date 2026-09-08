@@ -3036,7 +3036,86 @@ suites).
 Pin and artifact left staged together for one commit — the workflow design D1-D3 built the pin to
 force, rather than a pin bump landing separately from the rebuild it obligates.
 
+## 2026-09-01 — the release that the green job did not produce
+
+Written 2026-09-08, a week late, covering 2026-08-26 through 2026-09-01. The lag is the
+entry's own first finding: nothing here was caught by using the tool or by CI. It was caught
+while writing a launch article, because an article has to link an install command that works.
+
+**Both READMEs were inverted.** Line 9 said "v0.2.0, on crates.io" and line 57 said
+`cargo install looqlog` "is planned but not published yet". The second was false since
+2026-08-20. Worse, the instruction that led the section was this:
+
+```
+curl -LO https://github.com/yushman/looqlog/releases/latest/download/looqlog-0.1.0-x86_64-unknown-linux-musl
+```
+
+Measured, not assumed:
+
+```
+404  releases/latest/download/looqlog-0.1.0-x86_64-unknown-linux-musl
+200  releases/latest/download/looq-0.1.0-x86_64-unknown-linux-musl
+```
+
+Two independent faults in one line. The asset name carried `looqlog`, but the only published
+release was `v0.1.0`, made **before** ADR-0009's rename, so its assets are named `looq-*`.
+And the name carried a version while the URL said `latest` — a form that breaks by
+construction the moment a newer release exists. The READMEs therefore documented a broken
+path in detail and talked the reader out of the working one. Fixed in `18ea73b`, both files
+in one commit.
+
+**Then the larger fault: there was no `v0.2.0` release at all.** The tag exists and is pushed
+(`refs/tags/v0.2.0` → `9d7ba6b`). The Release workflow ran against it twice —
+`32371005400` and `32372065209`, 2026-08-20 — and **both runs reported success**. Yet
+`releases/latest` returned `v0.1.0` and `releases/tags/v0.2.0` returned `Not Found`.
+
+Diagnosis had a hard limit from this machine: the anonymous API cannot see drafts, so
+"draft or deleted" was not decidable here. Two things narrowed it anyway. `release.yml`
+passes no `draft` input to `softprops/action-gh-release@v2`, which publishes by default, so
+a draft should never have been produced. And the maintainer confirmed no draft was visible
+in the web UI. Whatever created it, it was gone.
+
+**No rebuild was needed to fix it.** The build job uploads each binary as a run artifact, and
+those were still retained — four per run, `expired=false`, held until 2026-11-18. Re-running
+the workflow recreated the release from the same tag. Verified after:
+
+```
+v0.2.0 | looqlog 0.2.0 | draft: False | published: 2026-09-01
+  looqlog-0.2.0-x86_64-unknown-linux-musl    2 792 032 B   (~2.66 MiB, TDR §5 budget ~10 MB)
+  looqlog-0.2.0-x86_64-pc-windows-msvc.exe   2 790 912 B
+  looqlog-0.2.0-x86_64-apple-darwin          2 410 904 B
+  looqlog-0.2.0-aarch64-apple-darwin         2 409 152 B
+```
+
+Re-running was safe to reason about: `v0.2.0` points at `9d7ba6b`, where source and vendored
+`core.wasm` were consistent — the skew that produced `46e3db4` came in with the *next*
+commit, `156044f`. So the rebuilt release matches what crates.io already serves.
+
+**What went back into the README, and why that shape** (`26c1d19`). `cargo install` stays
+first. The binary download returned below it, with the URL pinned to
+`releases/download/v0.2.0/` rather than `releases/latest/download/`. Since asset names carry
+the version, a `latest` link always names a file that will stop existing; a tag-pinned link
+goes stale visibly instead of breaking silently. Both forms were checked at 200 before the
+text was written. The old "runs on any distribution" wording did not come back —
+"statically linked against musl" is what is actually true, and the reader is sent to
+"Which platforms are verified how" for the difference.
+
+**The finding worth keeping.** `frontend-artifact-staleness` exists because a vendored
+artifact can silently drift from its source; that guard works, and on 2026-08-23 it caught a
+real inert fix. But nothing guarded the *existence of the release itself*. The release
+workflow's contract is "a `v*` tag publishes downloadable binaries" (`packaging` spec), and
+it reported success twice while that contract was unmet for twelve days. A green job is
+evidence that steps exited zero, not that the outcome exists — and the one check nobody had
+written was the cheapest of all: ask the API whether the release is there.
+
 ## Ideas for later
+
+- The release workflow reports success without verifying its own outcome. After
+  `softprops/action-gh-release` runs, a final step should query
+  `/repos/:owner/:repo/releases/tags/$GITHUB_REF_NAME` and fail if the release is
+  absent, is a draft, or carries fewer assets than the target matrix has entries. The
+  2026-09-01 entry above is what its absence costs: two green runs, twelve days, and a
+  README that documented a 404.
 
 - The 216,854-byte `core.wasm` from the rename work is unexplained (entry above). If the
   staleness job fires again with no source change, capture the failing artifact and
