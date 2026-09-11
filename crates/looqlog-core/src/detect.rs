@@ -264,6 +264,45 @@ mod tests {
         assert_eq!(result.timestamp_offset, Some(0));
     }
 
+    /// The same assertion as above, on the input `adb logcat` actually produces
+    /// (`logcat-padded-tags` task 4.5). The test above is built from bugreport lines,
+    /// whose tags are long enough to need no padding, so it passes whether or not the
+    /// recognizer accepts a padded tag — it cannot fail on the bug it was written to
+    /// guard. A boot log is where this breaks: short system tags (`vold`, `init`,
+    /// `netd`) are padded, 15.5% of a measured 37,427-line dump took the unprefixed
+    /// path, and detection reported "fell back to plain text" on input that was nothing
+    /// but logcat.
+    #[test]
+    fn padded_logcat_tags_are_a_threshold_match_not_a_fallback() {
+        let mut lines: Vec<&str> =
+            vec!["01-01 03:00:01.182   135   135 I vold    : Vold 3.0 firing up"; 90];
+        lines.extend(vec!["--------- beginning of system"; 10]);
+        let result = detect(&lines, &ctx());
+        assert_eq!(result.format, Format::Plain);
+        assert_eq!(result.outcome, DetectionOutcome::Threshold);
+        assert!((result.match_fraction - 0.90).abs() < 1e-9);
+        assert_eq!(result.timestamp_shape, Some(TimestampShape::Logcat));
+        assert_eq!(result.timestamp_offset, Some(0));
+    }
+
+    /// Padding is a property of the tag's width, not of the record: a real dump mixes
+    /// both in the same 100 lines, and they have to count towards one shape rather than
+    /// splitting the modal vote.
+    #[test]
+    fn padded_and_unpadded_logcat_records_count_towards_one_shape() {
+        let mut lines: Vec<&str> =
+            vec!["01-01 03:00:01.183   135   135 W vold    : Failed to LOOP_GET_STATUS64"; 50];
+        lines.extend(vec![
+            "01-01 03:00:03.230   370   370 I SystemServiceManager: Starting com.android.server.pm.Installer";
+            50
+        ]);
+        let result = detect(&lines, &ctx());
+        assert_eq!(result.format, Format::Plain);
+        assert_eq!(result.outcome, DetectionOutcome::Threshold);
+        assert!((result.match_fraction - 1.0).abs() < 1e-9);
+        assert_eq!(result.timestamp_shape, Some(TimestampShape::Logcat));
+    }
+
     /// The sticky choice records logcat like any other shape, and the modal rule still
     /// applies — one logcat line in an ISO file does not fix the hint.
     #[test]

@@ -1,0 +1,140 @@
+01-01 03:00:01.182   135   135 I vold    : Vold 3.0 (the awakening) firing up
+01-01 03:00:01.182   135   135 D vold    : Detected support for: ext4 f2fs vfat
+01-01 03:00:01.183   135   135 D vold    : Found unmanaged dm device named vendor
+01-01 03:00:01.183   135   135 D vold    : Found unmanaged dm device named system
+01-01 03:00:01.183   135   135 W vold    : Failed to LOOP_GET_STATUS64 /dev/block/loop3: No such device or address
+01-01 03:00:01.183   135   135 W vold    : Failed to LOOP_GET_STATUS64 /dev/block/loop4: No such device or address
+01-01 03:00:01.183   135   135 W vold    : Failed to LOOP_GET_STATUS64 /dev/block/loop1: No such device or address
+01-01 03:00:01.183   135   135 W vold    : Failed to LOOP_GET_STATUS64 /dev/block/loop2: No such device or address
+01-01 03:00:01.183   135   135 W vold    : Failed to LOOP_GET_STATUS64 /dev/block/loop5: No such device or address
+01-01 03:00:01.183   135   135 W vold    : Failed to LOOP_GET_STATUS64 /dev/block/loop7: No such device or address
+01-01 03:00:01.183   135   135 W vold    : Failed to LOOP_GET_STATUS64 /dev/block/loop6: No such device or address
+01-01 03:00:01.183   135   135 W vold    : Failed to LOOP_GET_STATUS64 /dev/block/loop0: No such device or address
+01-01 03:00:01.183   135   135 I vold    : Skip mounting partition: /product
+01-01 03:00:01.183   135   135 I vold    : Skip mounting partition: /product_services
+01-01 03:00:01.184   135   135 D vold    : VoldNativeService::start() completed OK
+01-01 03:00:02.267   135   138 I vold    : Found disk at /devices/platform/a003e00.virtio_mmio/virtio6/block/vde but delaying scan due to secure keyguard
+01-01 03:00:02.300   135   135 D vold    : fscrypt_init_user0
+01-01 03:00:02.300   135   135 D vold    : fscrypt_prepare_user_storage for volume null, user 0, serial 0, flags 1
+01-01 03:00:02.300   135   135 D vold    : Preparing: /data/system/users/0
+01-01 03:00:02.300   135   135 D vold    : Preparing: /data/misc/profiles/cur/0
+01-01 03:00:02.300   135   135 D vold    : Preparing: /data/system_de/0
+01-01 03:00:02.300   135   135 D vold    : Preparing: /data/misc_de/0
+01-01 03:00:02.300   135   135 D vold    : Preparing: /data/vendor_de/0
+01-01 03:00:02.300   135   135 D vold    : Preparing: /data/user_de/0
+01-01 03:00:02.300   135   135 D vold    : /system/bin/vold_prepare_subdirs
+01-01 03:00:02.300   135   135 D vold    :     prepare
+01-01 03:00:02.300   135   135 D vold    :     
+01-01 03:00:02.300   135   135 D vold    :     0
+01-01 03:00:02.300   135   135 D vold    :     1
+01-01 03:00:02.303   135   135 D vold    : fscrypt_unlock_user_key 0 serial=0 token_present=0
+01-01 03:00:02.385   197   197 I android.hardware.wifi@1.0-service: Wifi Hal is booting up...
+01-01 03:00:02.386   197   197 I ServiceManagement: Registered android.hardware.wifi@1.3::IWifi/default (start delay of 46ms)
+01-01 03:00:02.438   255   255 I wificond: wificond is starting up...
+01-01 03:00:02.472   239   239 I installd: installd firing up
+01-01 03:00:03.158   370   370 I SystemServer: InitBeforeStartServices
+01-01 03:00:03.158   370   370 W SystemServer: System clock is before 1970; setting to 1970.
+01-01 03:00:03.159   370   370 I SystemServer: Entered the Android system server!
+01-01 03:00:03.225   370   370 D SystemServerTiming: InitBeforeStartServices took to complete: 67ms
+01-01 03:00:03.225   370   370 I SystemServer: StartServices
+01-01 03:00:03.225   370   370 I SystemServer: StartWatchdog
+01-01 03:00:03.230   370   370 D SystemServerTiming: StartWatchdog took to complete: 5ms
+01-01 03:00:03.230   370   370 I SystemServer: Reading configuration...
+01-01 03:00:03.230   370   370 I SystemServer: ReadingSystemConfig
+01-01 03:00:03.230   370   370 D SystemServerTiming: ReadingSystemConfig took to complete: 0ms
+01-01 03:00:03.230   370   370 I SystemServer: StartInstaller
+01-01 03:00:03.230   370   370 I SystemServiceManager: Starting com.android.server.pm.Installer
+01-01 03:00:03.230   370   396 D SystemServerInitThreadPool: Started executing ReadingSystemConfig
+01-01 03:00:03.233   370   370 D SystemServerTiming: StartInstaller took to complete: 3ms
+01-01 03:00:03.233   370   370 I SystemServer: DeviceIdentifiersPolicyService
+01-01 03:00:03.233   370   370 I SystemServiceManager: Starting com.android.server.os.DeviceIdentifiersPolicyService
+01-01 03:00:03.233   370   370 D SystemServerTiming: DeviceIdentifiersPolicyService took to complete: 0ms
+01-01 03:00:03.258   370   403 E KernelCpuSpeedReader: Failed to read cpu-freq: /sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state: open failed: ENOENT (No such file or directory)
+01-01 03:00:03.267   370   370 I IntentFirewall: Read new rules (A:0 B:0 S:0)
+01-01 03:00:03.274   370   370 D AppOps  : AppOpsService published
+01-01 03:00:03.277   370   370 D SystemServerTiming: StartActivityManager took to complete: 42ms
+01-01 03:00:03.277   370   370 I SystemServer: StartPowerManager
+01-01 03:00:03.277   370   370 I SystemServiceManager: Starting com.android.server.power.PowerManagerService
+01-01 03:00:03.281   370   370 D SystemServerTiming: StartPowerManager took to complete: 4ms
+01-01 03:00:03.281   370   370 I SystemServer: StartThermalManager
+01-01 03:00:03.281   370   370 I SystemServiceManager: Starting com.android.server.power.ThermalManagerService
+01-01 03:00:03.282   370   370 D SystemServerTiming: StartThermalManager took to complete: 1ms
+01-01 03:00:03.282   370   370 I SystemServer: InitPowerManagement
+01-01 03:00:03.282   370   370 D SystemServerTiming: InitPowerManagement took to complete: 0ms
+01-01 03:00:03.282   370   370 I SystemServer: StartRecoverySystemService
+09-04 17:09:20.852   370  2025 I ActivityManager: Killing 3218:dev.droidjudge.demo/u0a266 (adj 0): stop dev.droidjudge.demo
+09-04 17:09:20.852   370  2025 W ActivityManager: Scheduling restart of crashed service dev.droidjudge.demo/.DemoNotificationListener in 1000ms
+09-04 17:09:20.853   370  2025 I ActivityManager:   Force stopping service ServiceRecord{430bf87 u0 dev.droidjudge.demo/.DemoNotificationListener}
+09-04 17:09:20.853   370   370 V NotificationListeners: 0 notification listener connection lost: ComponentInfo{dev.droidjudge.demo/dev.droidjudge.demo.DemoNotificationListener}
+09-04 17:09:20.853   370   370 W NotificationListeners: 0 notification listener binding died: ComponentInfo{dev.droidjudge.demo/dev.droidjudge.demo.DemoNotificationListener}
+09-04 17:09:20.853   370   370 V NotificationListeners: onNullBinding() called with: name = [ComponentInfo{dev.droidjudge.demo/dev.droidjudge.demo.DemoNotificationListener}]
+09-04 17:09:20.853   370  3353 W Binder  : Outgoing transactions from this process must be FLAG_ONEWAY
+09-04 17:09:20.853   370  3353 W Binder  : java.lang.Throwable
+09-04 17:09:20.853   370  3353 W Binder  : 	at android.os.BinderProxy.transact(BinderProxy.java:480)
+09-04 17:09:20.853   370  3353 W Binder  : 	at android.app.IInstrumentationWatcher$Stub$Proxy.instrumentationFinished(IInstrumentationWatcher.java:205)
+09-04 17:09:20.853   370  3353 W Binder  : 	at com.android.server.am.InstrumentationReporter$MyThread.run(InstrumentationReporter.java:86)
+09-04 17:09:20.854  3205  3205 D AndroidRuntime: Shutting down VM
+09-04 17:09:20.870   370  2050 D NotificationListeners: Removing active service ComponentInfo{dev.droidjudge.demo/dev.droidjudge.demo.DemoNotificationListener}
+09-04 17:09:20.870   370   392 W ActivityManager: setHasOverlayUi called on unknown pid: 3218
+09-04 17:09:20.881   177   177 I Zygote  : Process 3218 exited due to signal 9 (Killed)
+09-04 17:09:20.897   370   400 I libprocessgroup: Successfully killed process cgroup uid 10266 pid 3218 in 44ms
+09-04 17:09:21.316   370   398 I ActivityManager: Force stopping dev.droidjudge.demo appid=10266 user=-1: deletePackageX
+09-04 17:09:21.317   370   411 I PackageManager: Removing old permission tree: dev.droidjudge.demo.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION from package dev.droidjudge.demo
+09-04 17:09:21.317   370   411 I PackageManager: Un-granting permission android.permission.GLOBAL_SEARCH from package com.android.quicksearchbox (protectionLevel=18 flags=0x3088be45)
+09-04 17:09:21.317   370   411 I PackageManager: Un-granting permission android.permission.BIND_WALLPAPER from package com.android.camera2 (protectionLevel=18 flags=0x20d8bc45)
+09-04 18:03:50.615   564  3557 D NetworkMonitor/100: isCaptivePortal: isSuccessful()=true isPortal()=false RedirectUrl=null isPartialConnectivity()=false Time=244ms
+09-04 18:03:50.448   370   391 I chatty  : uid=1000(system) android.io identical 16 lines
+09-04 18:03:50.448   370   391 I DropBoxManagerService: add tag=system_app_strictmode isTagEnabled=true flags=0x2
+09-04 18:03:50.617   370   478 D ConnectivityService: NetworkAgentInfo [MOBILE (LTE) - 100] validation passed
+09-04 18:03:50.631   176   176 I netd    : idletimerAddInterface("radio0", 10, "0") <11.85ms>
+09-04 18:03:50.636   176   176 I netd    : idletimerRemoveInterface("wlan0", 15, "1") <4.12ms>
+09-04 18:03:50.636   370   478 D ConnectivityService: Switching to new default network: NetworkAgentInfo{ ni{[type: MOBILE[LTE], state: CONNECTED/CONNECTED, reason: connected, extra: epc.tmobile.com, failover: false, available: true, roaming: false]}  network{100}  nethandle{432902426637}  lp{{InterfaceName: radio0 LinkAddresses: [ fe80::c4d5:ff:fe21:3ed2/64,10.0.2.15/24,fec0::c4d5:ff:fe21:3ed2/64,fec0::587:6f3c:80a8:c343/64 ] DnsAddresses: [ /10.0.2.3 ] Domains: null MTU: 1500 TcpBufferSizes: 524288,1048576,2097152,262144,524288,1048576 Routes: [ ::/0 -> fe80::2 radio0,0.0.0.0/0 -> 10.0.2.2 radio0,fe80::/64 -> :: radio0,10.0.2.0/24 -> 0.0.0.0 radio0,fec0::/64 -> :: radio0 ]}}  nc{[ Transports: CELLULAR Capabilities: MMS&SUPL&DUN&FOTA&IMS&CBS&INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VPN&VALIDATED&NOT_ROAMING&NOT_CONGESTED&NOT_SUSPENDED LinkUpBandwidth>=51200Kbps LinkDnBandwidth>=102400Kbps Specifier: <1>]}  Score{50}  everValidated{true}  lastValidated{true}  created{true} lingering{false} explicitlySelected{false} acceptUnvalidated{false} everCaptivePortalDetected{false} lastCaptivePortalDetected{false} captivePortalValidationPending{false} partialConnectivity{false} acceptPartialConnectivity{false} clat{mBaseIface: null, mIface: null, mState: IDLE} }
+09-04 18:03:50.636   176   176 I netd    : networkSetDefault(100) <0.14ms>
+09-04 18:03:50.640   370   478 W BestClock: java.time.DateTimeException: Missing NTP fix
+09-04 18:03:50.664   176   176 I netd    : trafficSwapActiveStatsMap() <23.84ms>
+09-04 18:03:50.665   176   176 I netd    : tetherGetStats() <0.61ms>
+09-04 18:03:50.667   370   478 W BestClock: java.time.DateTimeException: Missing NTP fix
+09-04 18:03:50.667   370   472 W BestClock: java.time.DateTimeException: Missing NTP fix
+09-04 18:03:50.670   176   176 I netd    : networkSetPermissionForNetwork(100, 0) <1.99ms>
+09-04 18:03:50.671   370   535 D NetworkTimeUpdateService: New default network 100; checking time.
+09-04 18:03:50.672   370   478 D ConnectivityService: Sending DISCONNECTED broadcast for type 1 NetworkAgentInfo [WIFI () - 101] isDefaultNetwork=true
+09-04 18:03:50.678   370   478 D ConnectivityService: Sending CONNECTED broadcast for type 0 NetworkAgentInfo [MOBILE (LTE) - 100] isDefaultNetwork=true
+09-04 18:03:50.679   370   478 D ConnectivityService: Setting DNS servers for network 100 to [/10.0.2.3]
+09-04 18:03:50.679   370   478 D DnsManager: setDnsConfigurationForNetwork(100, [10.0.2.3], [], 1800, 25, 8, 64, 0, 0, , [10.0.2.3])
+09-04 18:03:50.681   176   176 I netd    : DnsResolverService::setResolverConfiguration(100, [10.0.2.3], [], 1800, 25, 8, 64, 0, 0, [10.0.2.3], []) -> (0) (0.9ms)
+09-04 18:03:50.681   176   176 I netd    : setResolverConfiguration() <0.94ms>
+09-08 10:43:24.705   370   397 I RoleUserState: Wrote roles.xml successfully
+09-08 10:43:24.888  3969  3969 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-08 10:43:24.895  3969  3969 E libc    : Access denied finding property "persist.device_config.runtime_native_boot.enable_apex_image"
+09-08 10:43:24.895  3969  3969 I AndroidRuntime: Using default boot image
+09-08 10:43:24.895  3969  3969 E libc    : Access denied finding property "persist.device_config.runtime_native_boot.disable_lock_profiling"
+09-08 10:43:24.895  3969  3969 I AndroidRuntime: Leaving lock profiling enabled
+09-08 10:43:24.895  3969  3969 E libc    : Access denied finding property "persist.device_config.runtime_native_boot.enable_generational_cc"
+09-08 10:43:24.892  3969  3969 W app_process: type=1400 audit(0.0:198): avc: denied { read } for name="u:object_r:device_config_runtime_native_boot_prop:s0" dev="tmpfs" ino=7286 scontext=u:r:shell:s0 tcontext=u:object_r:device_config_runtime_native_boot_prop:s0 tclass=file permissive=0
+09-08 10:43:24.892  3969  3969 I chatty  : uid=2000(shell) app_process identical 1 line
+09-08 10:43:24.892  3969  3969 W app_process: type=1400 audit(0.0:200): avc: denied { read } for name="u:object_r:device_config_runtime_native_boot_prop:s0" dev="tmpfs" ino=7286 scontext=u:r:shell:s0 tcontext=u:object_r:device_config_runtime_native_boot_prop:s0 tclass=file permissive=0
+09-08 10:43:24.898  3969  3969 I app_process: Core platform API reporting enabled, enforcing=false
+09-08 10:43:25.267  3969  3969 D ICU     : Time zone APEX file found: /apex/com.android.tzdata/etc/icu/icu_tzdata.dat
+09-08 10:43:25.295  3969  3969 I app_process: The ClassLoaderContext is a special shared library.
+09-08 10:43:25.314  3969  3969 W app_process: JNI RegisterNativeMethods: attempt to register 0 native methods for android.media.AudioAttributes
+09-08 10:43:25.317  3969  3969 D AndroidRuntime: Calling main entry com.android.commands.am.Am
+09-08 10:43:25.321   370  1930 I ActivityManager: Force stopping dev.droidjudge.demo appid=10268 user=0: start instr
+09-08 10:43:25.326   370   370 W Looper  : Drained
+09-08 12:00:10.295   191  1747 D gralloc_ranchu: gralloc_alloc: Creating ashmem region of size 823296
+09-08 12:00:10.295   191  1747 D gralloc_ranchu: gralloc_alloc: Creating ashmem region of size 823296
+09-08 12:00:10.298  5064  5088 D EGL_emulation: eglMakeCurrent: 0x7420e4a7c0: ver 3 1 (tinfo 0x7420e18e80)
+09-08 12:00:10.323   370   397 I ActivityTaskManager: Displayed dev.droidjudge.demo/.MainActivity: +329ms
+09-08 12:00:10.361   122   122 E SELinux : avc:  denied  { find } for interface=android.hardware.memtrack::IMemtrack sid=u:r:untrusted_app:s0:c20,c257,c512,c768 pid=5064 scontext=u:r:untrusted_app:s0:c20,c257,c512,c768 tcontext=u:object_r:hal_memtrack_hwservice:s0 tclass=hwservice_manager permissive=0
+09-08 12:00:10.361  5064  5085 E memtrack: Couldn't load memtrack module
+09-08 12:00:10.361  5064  5085 W android.os.Debug: failed to get memory consumption info: -1
+09-08 12:00:10.364   694  1053 D EGL_emulation: eglMakeCurrent: 0x73c40327e0: ver 3 1 (tinfo 0x73c40419c0)
+09-08 12:00:10.368  5064  5085 E memtrack: Couldn't load memtrack module
+09-08 12:00:15.647  5064  5085 E memtrack: Couldn't load memtrack module
+09-08 12:00:15.647  5064  5085 W android.os.Debug: failed to get memory consumption info: -1
+09-08 12:00:15.656  5064  5085 E memtrack: Couldn't load memtrack module
+09-08 12:00:15.656  5064  5085 W android.os.Debug: failed to get memory consumption info: -1
+09-08 12:00:15.656  5064  5085 I droidjudge: droidjudge TELEMETRY notification-alert-exfil-001: Telemetry(wallClockMillis=0, timeToFirstSignalMillis=0, firstSignalSource=FIRST_TOOL_CALL, totalPssDeltaKb=12, thermalStatusStart=0, thermalStatusEnd=0, suspect=true)
+09-08 12:00:15.664  5064  5079 W System  : A resource failed to call close. 
+09-08 12:00:15.664  5064  5079 W System  : A resource failed to call close. 
+09-08 12:00:15.704   516   516 V MediaRouter: Selecting route: RouteInfo{ name=Phone, description=null, status=null, category=RouteCategory{ name=System types=ROUTE_TYPE_LIVE_AUDIO ROUTE_TYPE_LIVE_VIDEO  groupable=false }, supportedTypes=ROUTE_TYPE_LIVE_AUDIO ROUTE_TYPE_LIVE_VIDEO , presentationDisplay=null }
+09-08 12:00:15.704   251  5159 I GenericSource: start

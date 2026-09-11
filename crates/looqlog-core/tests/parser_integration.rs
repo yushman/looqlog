@@ -857,6 +857,122 @@ fn bugreport_shaped_input_parses_its_logcat_lines_with_no_sticky_hint() {
     assert_eq!(parser.diagnostics().total(), 0);
 }
 
+// ---------------------------------------------------------------------------
+// logcat-padded-tags tasks 4.7 / 4.8: `adb logcat -v threadtime` as it actually
+// comes out of a device, which is the corpus the recognizer was never measured
+// against. The fixture is a 140-line slice of 37,427 lines captured with
+// `adb -s emulator-5554 logcat -d` on an Android 10 emulator; regenerate it the
+// same way. It carries padded tags (`vold`, `libc`, `netd`, `Binder`, `System`),
+// unpadded ones (`ServiceManagement`, `wificond`, `SystemServerTiming`), the
+// two-column `pid tid` layout every line of that dump uses, padded-tag messages
+// with colons of their own, and two continuation chains. It carries no
+// three-column `uid` record because the measured emulator emits none (design D5).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn adb_logcat_fixture_is_fully_dated_levelled_and_tagged() {
+    let (entries, parser) = parse_fixture_auto("logcat-adb-threadtime.log");
+    let detection = parser.detection().unwrap();
+    assert_eq!(detection.format, Format::Plain);
+    // Every sampled line is a record, padded or not — the banner the bug produced
+    // ("fell back to plain text") is the thing this asserts against.
+    assert_eq!(detection.outcome, looqlog_core::DetectionOutcome::Threshold);
+    assert_eq!(
+        detection.timestamp_shape,
+        Some(looqlog_core::TimestampShape::Logcat)
+    );
+    assert_eq!(entries.len(), 140);
+
+    // The symptom that started this: 15.5% of the source dump reached the UI with no
+    // timestamp at all, because a single rejected space costs the record its whole
+    // prefix (design D1's all-or-nothing rule).
+    assert!(entries.iter().all(|e| e.timestamp.is_some()));
+    assert!(entries.iter().all(|e| e.timestamp_year_inferred));
+    assert!(entries.iter().all(|e| e.level.is_some()));
+    assert!(entries.iter().all(|e| e.fields.contains_key("tag")));
+    assert_eq!(parser.diagnostics().total(), 0);
+
+    // Design D3: the padding never reaches the field value, so `tag=vold` filters on
+    // what a person would type.
+    for entry in &entries {
+        let Some(FieldValue::String(tag)) = entry.fields.get("tag") else {
+            panic!("tag is not a string field: {:?}", entry.fields.get("tag"));
+        };
+        assert_eq!(tag.trim(), tag, "tag carries padding: {tag:?}");
+    }
+
+    let tags = parser.field_inventory().get("tag").unwrap();
+    for padded in ["vold", "libc", "netd", "Binder", "System", "chatty"] {
+        assert!(tags.values.contains_key(padded), "missing tag {padded}");
+    }
+    for unpadded in ["ServiceManagement", "wificond", "SystemServerTiming"] {
+        assert!(tags.values.contains_key(unpadded), "missing tag {unpadded}");
+    }
+    // The padded tag with the widest run in the dump (`ICU     :`, five spaces) and
+    // the narrowest (`SELinux :`, one) land on the same footing as an unpadded one.
+    assert!(tags.values.contains_key("ICU"));
+    assert!(tags.values.contains_key("SELinux"));
+
+    // A padded-tag message keeps its own colon (`Detected support for: ext4 …`).
+    let colon_message = entries
+        .iter()
+        .find(|e| e.message.starts_with("Detected support for:"))
+        .expect("the vold line whose message contains a colon");
+    assert_eq!(
+        colon_message.fields.get("tag"),
+        Some(&FieldValue::String("vold".to_string()))
+    );
+    assert_eq!(
+        colon_message.message,
+        "Detected support for: ext4 f2fs vfat"
+    );
+}
+
+/// Task 4.7: the trim happens where the byte range becomes a string, so
+/// `LogcatIdentity` compares the same text the `tag` field carries. If the padding
+/// survived into the identity, a padded-tag stack trace would still chain — and would
+/// stop chaining the moment anything changed how the tag is rendered.
+#[test]
+fn a_stack_trace_under_a_padded_tag_collapses_into_one_entry() {
+    let (entries, parser) = parse_plain(&fixture("logcat-adb-threadtime.log"));
+    assert_eq!(parser.diagnostics().total(), 0);
+    let links = links(&entries);
+
+    // `W Binder  : Outgoing transactions …`, then its `java.lang.Throwable` header and
+    // three `\tat …` frames, all under an identical `pid tid level tag`. Roots are
+    // recorded as 1-based line numbers, hence the `+ 1`.
+    let root = entries
+        .iter()
+        .position(|e| e.message.starts_with("Outgoing transactions"))
+        .expect("the Binder warning");
+    assert_eq!(links[root], None);
+    assert_eq!(entries[root + 1].message, "java.lang.Throwable");
+    assert_eq!(
+        &links[root + 1..root + 5],
+        &[Some(root + 1); 4],
+        "the padded-tag trace did not collapse into one entry"
+    );
+    for frame in &entries[root + 2..root + 5] {
+        assert!(frame.message.starts_with("at "));
+        // A member keeps its own values; nothing is copied from the root.
+        assert_eq!(
+            frame.fields.get("tag"),
+            Some(&FieldValue::String("Binder".to_string()))
+        );
+    }
+    assert_eq!(links[root + 5], None);
+
+    // The other chain in the fixture: an indented `vold` message list, which is a
+    // continuation by indentation rather than by frame marker.
+    let subdirs = entries
+        .iter()
+        .position(|e| e.message == "/system/bin/vold_prepare_subdirs")
+        .expect("the vold_prepare_subdirs root");
+    assert_eq!(links[subdirs], None);
+    assert_eq!(&links[subdirs + 1..subdirs + 5], &[Some(subdirs + 1); 4]);
+    assert_eq!(links[subdirs + 5], None);
+}
+
 #[test]
 fn docker_wrapper_fixture_unwraps_only_the_exact_member_set() {
     let (entries, parser) = parse_fixture_auto("docker-wrapper.jsonl");
@@ -1169,6 +1285,7 @@ fn line_at_a_time_feeding_produces_identical_entries_and_links() {
         "continuation-nested-cause.log",
         "continuation-logcat.log",
         "continuation-json-payload.log",
+        "logcat-adb-threadtime.log",
     ] {
         let data = fixture(name);
         let (whole, _) = parse_plain(&data);

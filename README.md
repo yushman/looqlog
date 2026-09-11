@@ -227,6 +227,12 @@ message is the text after the tag's colon, carrying neither. Both the `uid pid t
 consumed, so an ordinary line that merely opens with a date and a few numbers is not
 mistaken for a record.
 
+`adb logcat | looqlog` works on the default output, with no `-v` flag of your own.
+`-v threadtime` pads short tags out to a fixed column width — `I vold    : Vold 3.0
+firing up` — and that padding is read as padding: `vold    :` is recognised exactly as
+`ActivityManager:` is, and the `tag` field carries `vold`, not `vold    `, so `tag=vold`
+is what you type to filter on it.
+
 **Docker.** A JSON line whose members are exactly `log`, `stream` and `time` is
 unwrapped: the `log` member is parsed as a line in its own right, `time` supplies the
 timestamp when the inner line has none, and `stream` becomes a field. So

@@ -549,10 +549,27 @@ fn match_logcat_column(bytes: &[u8], start: usize) -> Option<usize> {
     accepted.then_some(i)
 }
 
-/// The tag and its terminating colon, as `(tag_end, after_colon)`. The tag carries no
-/// whitespace and no colon of its own, which is what stops the scan at
+/// The tag and its terminating colon, as `(tag_end, after_colon)`. The tag token itself
+/// carries no whitespace and no colon of its own, which is what stops the scan at
 /// `UsbDescriptorParser:` on a record whose *message* also contains a colon
 /// (`Unrecognized len: 58`).
+///
+/// Between the token and the colon, though, a run of spaces and tabs is allowed:
+/// `-v threadtime` — the default since Android 7 — pads the tag out to a fixed column
+/// width, so `adb logcat` emits `vold    :` where a bugreport emits `ActivityManager:`
+/// (`logcat-padded-tags` design D1). `tag_end` stays at the end of the *token*, so the
+/// range this returns never contains the padding and nothing downstream has to trim it
+/// (design D3).
+///
+/// The run is deliberately not length-bounded (design D2). AOSP's column width is not a
+/// promise to anyone, and an arbitrary cap is a constant the next reader has to research
+/// and cannot verify. The shape is anchored on both ends instead — a whitespace-free,
+/// colon-free token, then a mandatory colon, inside a sequence that must match in full
+/// from the `MM-DD` onward before any of it is consumed. The false positive this accepts
+/// is a line of the exact form `MM-DD hh:mm:ss.mmm`, two or three lowercase/numeric
+/// columns, a severity letter, a word, a long run of spaces and a colon; nothing in the
+/// measured corpus is shaped like that, and such a line is a logcat record by every
+/// other measure anyway.
 fn match_logcat_tag(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
     let mut i = start;
     while bytes
@@ -561,21 +578,27 @@ fn match_logcat_tag(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
     {
         i += 1;
     }
-    if i == start || bytes.get(i) != Some(&b':') {
+    let tag_end = i;
+    while bytes.get(i).is_some_and(|b| *b == b' ' || *b == b'\t') {
+        i += 1;
+    }
+    if tag_end == start || bytes.get(i) != Some(&b':') {
         return None;
     }
-    Some((i, i + 1))
+    Some((tag_end, i + 1))
 }
 
 /// logcat: `MM-DD hh:mm:ss.mmm`, two or three uid/pid/tid columns, a severity letter,
-/// and a tag terminated by `:`.
+/// and a tag terminated by `:` — with any amount of column padding between the two
+/// (`match_logcat_tag`).
 ///
 /// The whole sequence through that colon must match before anything is consumed
 /// (design.md D1). The tempting implementation — match the timestamp, then skip
 /// number-like tokens — is the dangerous one: an unbounded skip eventually swallows
 /// the head of an ordinary line and hands whatever follows to the level matcher. The
-/// `Tag:` anchor means a line that merely opens with a date and some numbers is
-/// rejected outright and left to the other shapes.
+/// colon is what makes that safe, and it stays the anchor once the padding is allowed:
+/// `vold    started` is still rejected outright and left to the other shapes, because
+/// a run of spaces widens where the colon may sit, not whether one is required.
 fn match_logcat(bytes: &[u8], start: usize) -> Option<LogcatMatch> {
     let i = take_digits(bytes, start, 2)?;
     let i = take_byte(bytes, i, b'-')?;
@@ -1325,6 +1348,89 @@ mod tests {
         assert!(extract_leading("04-21 13:07:51.985 806 29149 Q Tag: boom", &ctx).is_none());
         // Not a real date.
         assert!(extract_leading("04-99 13:07:51.985 806 29149 W Tag: boom", &ctx).is_none());
+    }
+
+    // --- padded tags (`logcat-padded-tags` tasks 4.1-4.4) --------------------
+
+    /// `-v threadtime` pads the tag to a fixed column width, which is 15.5% of the
+    /// lines of a measured `adb logcat` dump and none of the lines of the bugreport the
+    /// recognizer was built against.
+    #[test]
+    fn logcat_tag_padded_to_the_column_width_matches() {
+        let ctx = ctx_at("2026-08-20T00:00:00Z");
+        let matched = extract_leading(
+            "01-01 03:00:01.182   135   135 I vold    : Vold 3.0 (the awakening) firing up",
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(matched.shape, TimestampShape::Logcat);
+        assert_eq!(matched.level_letter, Some(b'I'));
+        let record = matched.logcat.unwrap();
+        assert_eq!(record.uid, None);
+        assert_eq!(record.pid, "135");
+        assert_eq!(record.tid, "135");
+        // Design D3: the reported range ends at the tag token, so the padding never
+        // reaches the field value or the continuation identity.
+        assert_eq!(record.tag, "vold");
+        // The message still starts after the *colon*, not after the tag.
+        assert_eq!(matched.rest, "Vold 3.0 (the awakening) firing up");
+    }
+
+    /// The padding widens where the terminating colon may sit; it does not make the
+    /// scan give up on the first colon it finds.
+    #[test]
+    fn logcat_padded_tag_stops_at_its_own_colon_not_the_messages() {
+        let ctx = ctx_at("2026-08-20T00:00:00Z");
+        let matched = extract_leading(
+            "01-01 03:00:01.182   135   135 D vold    : Detected support for: ext4 f2fs vfat",
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(matched.logcat.unwrap().tag, "vold");
+        assert_eq!(matched.rest, "Detected support for: ext4 f2fs vfat");
+    }
+
+    /// The anchor design D2 leans on when it declines to bound the run of spaces: the
+    /// colon is still mandatory, so whitespace after the tag buys a line nothing.
+    #[test]
+    fn logcat_padded_tag_without_a_colon_is_not_consumed() {
+        let ctx = ctx_at("2026-08-20T00:00:00Z");
+        assert!(
+            extract_leading("01-01 03:00:01.182   135   135 I vold    started", &ctx).is_none()
+        );
+        // …nor when the padding runs to the end of the line.
+        assert!(extract_leading("01-01 03:00:01.182   135   135 I vold    ", &ctx).is_none());
+        // …nor when the padding is all there is where the tag should be.
+        assert!(extract_leading("01-01 03:00:01.182   135   135 I     : boom", &ctx).is_none());
+    }
+
+    /// Both observed column layouts, with the padding applied to their tags.
+    #[test]
+    fn logcat_padded_tags_in_both_column_layouts() {
+        let ctx = ctx_at("2026-08-20T00:00:00Z");
+        let three = extract_leading(
+            "04-18 19:21:16.151  1000   806   995 D AppOps  : freezing 2521 com.x",
+            &ctx,
+        )
+        .unwrap();
+        let record = three.logcat.unwrap();
+        assert_eq!(record.uid, Some("1000"));
+        assert_eq!(record.pid, "806");
+        assert_eq!(record.tid, "995");
+        assert_eq!(record.tag, "AppOps");
+        assert_eq!(three.rest, "freezing 2521 com.x");
+
+        let two = extract_leading(
+            "09-04 17:09:21.342   176   176 I netd    : tetherGetStats() <11.55ms>",
+            &ctx,
+        )
+        .unwrap();
+        let record = two.logcat.unwrap();
+        assert_eq!(record.uid, None);
+        assert_eq!(record.pid, "176");
+        assert_eq!(record.tid, "176");
+        assert_eq!(record.tag, "netd");
+        assert_eq!(two.rest, "tetherGetStats() <11.55ms>");
     }
 
     #[test]

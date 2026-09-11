@@ -3157,8 +3157,121 @@ won't be until the next `v*` tag is pushed. That gap is stated here rather than 
 is unchanged — only the workflow's willingness to confirm that contract was met before
 reporting success. Nothing user-facing moved.
 
+## 2026-09-11 — `logcat-padded-tags`: eight spaces the recognizer had never seen
+
+`adb logcat -v threadtime` — the default since Android 7 — pads the tag out to a column
+width of 8. `01-01 03:00:01.182   135   135 I vold    : Vold 3.0 firing up`. The logcat
+recognizer required the colon immediately after the tag, and because design D1 of
+`logcat-and-payload-precision` makes the shape all-or-nothing, a single rejected space
+cost the record its timestamp, its level, its tag and both its columns at once. Straight
+to `parse_unprefixed`, whole line as the message.
+
+The recognizer was built against an Android bugreport, whose logcat sections are all
+`ActivityManager:` and `ProcessCpuTracker:` — long enough to need no padding. Piping
+`adb logcat` into looqlog, the single most obvious way to use this on Android, was never
+on the measured corpus.
+
+**The corpus it does have now.** 37,427 lines captured off an Android 10 emulator with
+`adb -s emulator-5554 logcat -d`. 5,791 of them — 15.5% — had padded tags. Longest space
+run: 5 (a three-character tag). Padded: `vold`, `init`, `netd`, `libc`, `System`,
+`Binder`, `Looper`, `SELinux`, `Zygote`, `chatty`, `adbd`, `ICU`, `Layer`, `AppOps`,
+`Telecom`. Unpadded: `ServiceManagement`, `wificond`, `installd`, `SystemServerTiming`,
+`ActivityManager`, `PackageManager`. A 140-line slice of it is now
+`crates/looqlog-core/tests/fixtures/logcat-adb-threadtime.log`; it carries both kinds,
+the two-column `pid tid` layout the emulator emits, a padded-tag message with a colon of
+its own, and two continuation chains. It deliberately carries no three-column `uid`
+record, because the emulator emits none and inventing shapes is how the original rule got
+written (design D5).
+
+**Before / after.**
+
+Same 37,427-line dump through the built binary, before and after, read off the UI:
+
+| | before | after |
+|---|---|---|
+| entries with no timestamp | 5,805 | 14 |
+| format banner | `fell back to plain text — no format matched at least 80%` | `plain (99%)` |
+| `tag=vold` | 0 | 66 |
+| substring `vold` | 67 | 67 |
+| diagnostics | 0 skipped | 0 skipped |
+
+`tag=vold` lands on 66 rather than 67 because the 67th is not a `vold` record at all —
+it is `ActivityManager: Force stopping … user=-1: vold reset`, a mention in a message.
+That is the filter being right, not off by one.
+
+The 14 that still have no timestamp are 2 `--------- beginning of system`/`main`
+banners, which are not records, and 12 records whose tag is *empty*:
+`09-08 10:43:24.053   239   239 E         : Couldn't opendir /data/app/vmdl…`. installd
+logs those with a null tag and logcat pads the empty string out to the column width.
+The recognizer rejects them, because it requires a non-empty tag token — which was true
+before this change too, and stays true after it. 12 lines in 37,427 (0.03%), each
+keeping its full text as a message but staying off the timeline. Noted here rather than
+fixed, because widening the tag rule is a separate decision from accepting its padding
+(see Ideas for later).
+
+Verifying this needed one thing the task list did not say: `core.wasm` is a vendored
+artifact under `crates/looqlog/assets/wasm/`, and the browser parses with it, not with
+the binary's own copy of the crate. `cargo build --release` after a `looqlog-core`
+change produces a binary that still serves the *old* parser to the page. The measurement
+above is only valid after `scripts/build-frontend.sh`. CI's staleness check would have
+caught the stale artifact; a local verification run has nothing that would.
+
+**What shipped:** `match_logcat_tag` scans the tag token, skips any run of spaces and
+tabs, then requires the colon. `tag_end` stays at the end of the token, so the returned
+byte range never contains the padding — `logcat_fields` and `LogcatIdentity::of` both
+needed no change at all, which is the point. One trim, at the place the range becomes a
+string, keeps the field value and the continuation identity provably the same text
+(design D3). Detection was not touched: a recognised prefix in ≥80% of the sample was
+already a threshold match.
+
+**The space run is not length-bounded (design D2).** 7 would cover every observed case.
+Rejected anyway: AOSP's column width is not a promise to anyone, and an arbitrary
+constant is a thing the next reader has to research and cannot verify. The shape is
+anchored on both ends already — a whitespace-free, colon-free token, then a mandatory
+colon, inside a sequence that must match in full from the `MM-DD` onward.
+
+**The test that could not fail.** `detect.rs:255`,
+`logcat_majority_input_is_a_threshold_match_not_a_fallback`, is built from
+`ActivityManager:` lines. It passes against the broken recognizer and against the fixed
+one — it cannot fail on the bug it was written to guard, which is a defect of its own.
+Its new pair, `padded_logcat_tags_are_a_threshold_match_not_a_fallback`, was verified the
+only way worth anything: the space-skip was commented back out and the test run.
+
+```
+---- detect::tests::padded_logcat_tags_are_a_threshold_match_not_a_fallback stdout ----
+panicked at crates/looqlog-core/src/detect.rs:282:9:
+assertion `left == right` failed
+  left: Fallback
+ right: Threshold
+```
+
+**Benchmarks**, `cargo bench -p looqlog-core --bench parse -- --baseline before`, against
+a baseline saved before the change:
+
+```
+parse_1mb/json                74.86 ms   -0.14%  No change in performance detected.
+parse_1mb/logfmt             102.39 ms   +0.57%  No change in performance detected.
+parse_1mb/plain              122.77 ms   -0.11%  No change in performance detected.
+parse_1mb/plain_mixed_shapes 148.73 ms   -0.42%  No change in performance detected.
+```
+
+`cargo test -p looqlog-core`: 125 + 52 green.
+
+**A decision a stranger would ask about.** The Binder stack trace in the new fixture
+chains its `java.lang.Throwable` header to the `Outgoing transactions …` line above it,
+not the other way round — the header is matched by `is_exception_header`, so the whole
+warning is one entry of five lines rather than a root plus a separate three-frame chain.
+That is existing, intended behavior from `multiline-entry-continuations`; it only looks
+surprising when you read the assertion before the rule.
+
 ## Ideas for later
 
+- The field inventory is noisy on logcat in a way this change deliberately left alone.
+  `logfmt::looks_like_payload` fires on prose whenever two `key=value`-ish tokens appear,
+  and base64 padding in APK paths supplies them: `/data/app/dev.example-DOEu2lRv9e54rjvTIYQ9Yg==`
+  becomes a field named `/data/app/dev.example-DOEu2lRv9e54rjvTIYQ9Yg` with the value `=`.
+  154 field names on the 37k-line corpus, a handful of them real. Not logcat-specific, in
+  a hot path shared by every format, and it needs its own change.
 - ~~The release workflow reports success without verifying its own outcome. After
   `softprops/action-gh-release` runs, a final step should query
   `/repos/:owner/:repo/releases/tags/$GITHUB_REF_NAME` and fail if the release is
