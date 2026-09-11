@@ -6,7 +6,9 @@ live-потока из stdin. Парсинг происходит в WebAssembly
 
 [English version](README.md) · [Сайт](https://yushman.github.io/looqlog/ru.html)
 
-> **Статус: v0.2.1, опубликован на [crates.io](https://crates.io/crates/looqlog).** В
+> **Статус: v0.2.1.** Готовые бинарники для него лежат на
+> [странице Releases](https://github.com/yushman/looqlog/releases/latest); на
+> [crates.io](https://crates.io/crates/looqlog) пока 0.2.0 — до публикации 0.2.1 там. В
 > v0.2.1 читаются выровненные пробелами теги, которые `adb logcat` выдаёт в формате по
 > умолчанию: на замеренном дампе с устройства это 15.5% строк, приходивших вообще без
 > времени и уровня. После
@@ -49,8 +51,10 @@ cargo install looqlog
 looqlog --version
 ```
 
-Ставится текущий релиз `0.2.1` с
-[crates.io](https://crates.io/crates/looqlog), и кроме Rust toolchain ничего не нужно.
+Ставится самая свежая версия, опубликованная на
+[crates.io](https://crates.io/crates/looqlog) — сейчас это `0.2.0`, — и кроме Rust
+toolchain ничего не нужно. Чтобы получить `0.2.1` уже сегодня, возьмите готовый бинарь
+ниже.
 
 Либо возьмите готовый бинарь, для него Rust не нужен вообще:
 
