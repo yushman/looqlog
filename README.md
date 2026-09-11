@@ -6,10 +6,7 @@ leave your machine.
 
 [Русская версия](README.ru.md) · [Website](https://yushman.github.io/looqlog/)
 
-> **Status: v0.2.1.** Prebuilt binaries for it are on the
-> [Releases page](https://github.com/yushman/looqlog/releases/latest);
-> [crates.io](https://crates.io/crates/looqlog) still carries 0.2.0 until 0.2.1 is
-> published there. v0.2.1 reads the
+> **Status: v0.2.1, on [crates.io](https://crates.io/crates/looqlog).** v0.2.1 reads the
 > padded tags that `adb logcat` emits in its default format, which on a measured device
 > dump was 15.5% of the lines arriving with no timestamp and no level at all. Since
 > v0.1.0 the project was renamed from `looq` (see
@@ -49,9 +46,8 @@ cargo install looqlog
 looqlog --version
 ```
 
-This installs the newest version published to
-[crates.io](https://crates.io/crates/looqlog) — currently `0.2.0` — and needs nothing but
-a Rust toolchain. For `0.2.1` today, take a prebuilt binary below.
+This installs the current release, `0.2.1`, from
+[crates.io](https://crates.io/crates/looqlog), and needs nothing but a Rust toolchain.
 
 Or take a prebuilt binary, which needs no Rust at all:
 
