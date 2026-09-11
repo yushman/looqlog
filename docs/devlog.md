@@ -3264,6 +3264,42 @@ warning is one entry of five lines rather than a root plus a separate three-fram
 That is existing, intended behavior from `multiline-entry-continuations`; it only looks
 surprising when you read the assertion before the rule.
 
+**Released as 0.2.1**, tag pushed the same day. The Release workflow went green in ~4
+minutes and, this time, `Verify the release exists and carries the uploaded assets` ran
+for real — the step written on 2026-09-08 against the 2026-09-01 incident. Checked
+independently anyway, because a step that verifies the outcome is still a step reporting
+on itself:
+
+```
+$ gh api repos/yushman/looqlog/releases/tags/v0.2.1 --jq '{draft, assets: [.assets[].name]}'
+{"draft":false,"assets":["looqlog-0.2.1-aarch64-apple-darwin",
+ "looqlog-0.2.1-x86_64-apple-darwin","looqlog-0.2.1-x86_64-pc-windows-msvc.exe",
+ "looqlog-0.2.1-x86_64-unknown-linux-musl"]}
+```
+
+**crates.io did not get 0.2.1.** `cargo publish -p looqlog-core` returned `403 Forbidden:
+this token does not have the required permissions to perform this action` — the stored
+credential has no publish scope. Nothing was published; the registry still carries 0.2.0.
+
+The interesting part is what that exposed. The version bump had already moved both READMEs
+to "Status: v0.2.1, on crates.io" and "this installs the current release, `0.2.1`", and
+those were pushed before the publish was attempted. For about twenty minutes the READMEs
+on `main` claimed a registry version that did not exist — the same shape of untrue claim as
+the green release job with no release behind it, and self-inflicted in the same way: the
+documentation was written to describe the intended end state rather than the reached one.
+Both files now name what the registry actually carries and point at the Releases page for
+the 0.2.1 binaries; they go back to the plain wording when 0.2.1 is published.
+
+Worth remembering for the next release: the README's version claims depend on a step that
+can fail *after* they are pushed. Either publish first and document second, or word them
+so they cannot outrun the fact.
+
+Also corrected today, in passing: `crates/looqlog/Cargo.toml` pins
+`looqlog-core = { version = "0.2.0" }` for the registry build, and bumping only the
+workspace version would have published a 0.2.1 binary that resolves 0.2.0 core from
+crates.io — shipping the exact parser this release exists to fix. Caught before tagging,
+but nothing would have caught it after.
+
 ## Ideas for later
 
 - The field inventory is noisy on logcat in a way this change deliberately left alone.
