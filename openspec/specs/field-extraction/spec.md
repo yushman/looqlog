@@ -233,12 +233,19 @@ filterable.
 ### Requirement: logcat columns become fields
 A recognised logcat record SHALL contribute its tag as a `tag` field and its numeric columns
 as `pid` and `tid`, adding `uid` when a third column is present. These SHALL be ordinary
-fields, filterable like any other, and SHALL NOT remain part of the message text.
+fields, filterable like any other, and SHALL NOT remain part of the message text. The `tag`
+field's value SHALL be the tag alone, carrying none of the whitespace `adb logcat` pads it
+with, so that the same tag filters identically whether or not the line it came from was
+padded.
 
 #### Scenario: The tag is filterable
 - **WHEN** a bugreport's logcat records carry tags such as `ActivityManager` and
   `ProcessCpuTracker`
 - **THEN** `tag` appears in the field inventory with those values and their counts
+
+#### Scenario: A padded tag is recorded without its padding
+- **WHEN** the record is `01-01 03:00:01.182   135   135 I vold    : Vold 3.0 firing up`
+- **THEN** the `tag` field's value is `vold`, and a `tag=vold` filter matches the entry
 
 #### Scenario: Three columns yield uid, pid and tid
 - **WHEN** a record's columns are `1000   806   995`

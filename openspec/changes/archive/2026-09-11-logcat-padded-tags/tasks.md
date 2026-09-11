@@ -80,7 +80,7 @@
 
 ## 6. Specs and docs
 
-- [ ] 6.1 Apply the delta specs: `log-parsing` (padding rule plus two scenarios),
+- [x] 6.1 Apply the delta specs: `log-parsing` (padding rule plus two scenarios),
       `field-extraction` (trimmed `tag` value), `format-detection` (padded-sample
       threshold requirement). Handled by `/opsx:archive`, not by hand — archiving is
       blocked until group 5 runs, so this stays open (precedent:
