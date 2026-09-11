@@ -3277,18 +3277,35 @@ $ gh api repos/yushman/looqlog/releases/tags/v0.2.1 --jq '{draft, assets: [.asse
  "looqlog-0.2.1-x86_64-unknown-linux-musl"]}
 ```
 
-**crates.io did not get 0.2.1.** `cargo publish -p looqlog-core` returned `403 Forbidden:
-this token does not have the required permissions to perform this action` — the stored
-credential has no publish scope. Nothing was published; the registry still carries 0.2.0.
+**crates.io needed a second attempt.** `cargo publish -p looqlog-core` first returned
+`403 Forbidden: this token does not have the required permissions to perform this action`
+— the stored credential had no publish scope. With a new token both crates went up in
+order, `looqlog-core` then `looqlog`, and the registry reports `0.2.1` as the max version
+of each.
 
-The interesting part is what that exposed. The version bump had already moved both READMEs
-to "Status: v0.2.1, on crates.io" and "this installs the current release, `0.2.1`", and
-those were pushed before the publish was attempted. For about twenty minutes the READMEs
-on `main` claimed a registry version that did not exist — the same shape of untrue claim as
-the green release job with no release behind it, and self-inflicted in the same way: the
-documentation was written to describe the intended end state rather than the reached one.
-Both files now name what the registry actually carries and point at the Releases page for
-the 0.2.1 binaries; they go back to the plain wording when 0.2.1 is published.
+Verified the way the `packaging` spec asks for — from a binary that never saw this
+machine's build tree:
+
+```
+$ cargo install looqlog --version 0.2.1 --root <throwaway> --locked
+$ head -300 full.txt | <throwaway>/bin/looqlog --port 7895
+   format:  plain (99%)
+   tag=vold: 30 of 300
+   no timestamp: 1 of 300   (the `--------- beginning of system` banner)
+```
+
+That is the check that matters, because the parser users actually run is the vendored
+`core.wasm` inside the published crate, not the workspace this was developed in.
+
+The interesting part is what the failed first attempt exposed. The version bump had
+already moved both READMEs to "Status: v0.2.1, on crates.io" and "this installs the
+current release, `0.2.1`", and those were pushed before the publish was attempted. For
+about forty minutes the READMEs on `main` claimed a registry version that did not exist —
+the same shape of untrue claim as the green release job with no release behind it, and
+self-inflicted in the same way: the documentation was written to describe the intended end
+state rather than the reached one. They were corrected to name what the registry actually
+carried, then put back once 0.2.1 was really there. Two commits that should not have been
+needed.
 
 Worth remembering for the next release: the README's version claims depend on a step that
 can fail *after* they are pushed. Either publish first and document second, or word them
