@@ -6,8 +6,10 @@ leave your machine.
 
 [Русская версия](README.ru.md) · [Website](https://yushman.github.io/looqlog/)
 
-> **Status: v0.2.0, on [crates.io](https://crates.io/crates/looqlog).** Since v0.1.0 the
-> project was renamed from `looq` (see
+> **Status: v0.2.1, on [crates.io](https://crates.io/crates/looqlog).** v0.2.1 reads the
+> padded tags that `adb logcat` emits in its default format, which on a measured device
+> dump was 15.5% of the lines arriving with no timestamp and no level at all. Since
+> v0.1.0 the project was renamed from `looq` (see
 > [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)) and learned to group multi-line
 > events: Java stack traces, Python tracebacks and pretty-printed payloads collapse into
 > the entry they continue, and the timeline counts events rather than physical lines.
@@ -44,16 +46,16 @@ cargo install looqlog
 looqlog --version
 ```
 
-This installs the current release, `0.2.0`, from
+This installs the current release, `0.2.1`, from
 [crates.io](https://crates.io/crates/looqlog), and needs nothing but a Rust toolchain.
 
 Or take a prebuilt binary, which needs no Rust at all:
 
 ```bash
 # Linux x86_64, statically linked against musl
-curl -LO https://github.com/yushman/looqlog/releases/download/v0.2.0/looqlog-0.2.0-x86_64-unknown-linux-musl
-chmod +x looqlog-0.2.0-x86_64-unknown-linux-musl
-./looqlog-0.2.0-x86_64-unknown-linux-musl --version
+curl -LO https://github.com/yushman/looqlog/releases/download/v0.2.1/looqlog-0.2.1-x86_64-unknown-linux-musl
+chmod +x looqlog-0.2.1-x86_64-unknown-linux-musl
+./looqlog-0.2.1-x86_64-unknown-linux-musl --version
 ```
 
 Also built for `aarch64-apple-darwin`, `x86_64-apple-darwin` and
@@ -61,7 +63,7 @@ Also built for `aarch64-apple-darwin`, `x86_64-apple-darwin` and
 published — see "Which platforms are verified how" below for what that does and does not
 prove.
 
-The URL above is pinned to `v0.2.0` on purpose: asset names carry the version, so a
+The URL above is pinned to `v0.2.1` on purpose: asset names carry the version, so a
 `releases/latest/download/` link breaks the moment a newer release exists. For any later
 version, take the file name from the
 [Releases page](https://github.com/yushman/looqlog/releases/latest).
