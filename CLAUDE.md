@@ -4,10 +4,8 @@ Single-binary Rust CLI that opens a local web UI for a log file or a live stdin
 stream. Parsing happens in WebAssembly inside the user's browser — privacy first,
 zero config, no runtime dependencies.
 
-Read before changing anything: [docs/PRD.md](docs/PRD.md) for product scope, users and
-non-goals, [docs/TDR.md](docs/TDR.md) for requirements, data flow and failure modes,
-[docs/adr/](docs/adr/) for why the architecture is the way it is, and
-[docs/mvp-plan.md](docs/mvp-plan.md) for what gets built when.
+Read [docs/adr/](docs/adr/) before changing anything — it explains why the
+architecture is the way it is.
 
 ## Language and READMEs
 
@@ -42,7 +40,7 @@ Key constraints, each with an ADR:
 - The project, binary and crate were originally named `looq`, superseded by ADR-0009 — [ADR-0006](docs/adr/0006-project-named-looq.md)
 - The project, binary and every crate are named `looqlog` — [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)
 
-**Privacy asymmetry to keep straight (TDR §12):** file mode never leaves the browser;
+**Privacy asymmetry to keep straight:** file mode never leaves the browser;
 stdin/live-tail mode goes over a localhost WebSocket in the clear, so it "does not leave
 the machine" but does cross a process boundary. The `/ws` origin check and per-process
 token (`security` spec) guard that socket against another page in the same browser, not
@@ -57,12 +55,12 @@ mode.
 - Core parser (`looqlog-core`): target-agnostic Rust lib crate, no `wasm-bindgen`/`web-sys`
 - WASM adapter: `wasm-bindgen`, `serde-wasm-bindgen`, built via `wasm-pack`
 - Frontend: TypeScript (strict), Vite, Web Components, `uPlot`, `comlink`
-- MCP (P2, not in MVP): `rmcp` SDK, native adapter over `looqlog-core`
+- MCP (P2): `rmcp` SDK, native adapter over `looqlog-core`
 
 ## Testing
 
 Cover the silent-failure list first — these are the places a bug would be quiet
-rather than loud (see TDR §7, §8, §12 and ADR-0004):
+rather than loud (see ADR-0004):
 
 - Malformed log lines must be skipped **with a reported warning**, never silently
   dropped or crash the parser.
@@ -72,7 +70,7 @@ rather than loud (see TDR §7, §8, §12 and ADR-0004):
   a silently shortened live tail looks like "nothing happened" to the user.
 - `--host` != `127.0.0.1` must always print the exposure warning — a missed warning
   is a silent privacy regression.
-- WASM parse/filter latency regressions (TDR §11 targets) are easy to introduce
+- WASM parse/filter latency regressions are easy to introduce
   silently; benchmark before merging changes to `looqlog-core`'s hot paths.
 
 ## Spec-driven workflow (OpenSpec) — required
@@ -108,24 +106,11 @@ longer.** This is a startup: the point of the spec artifacts is that the next pe
 A defect found while verifying an unarchived change is fixed inside that change —
 new tasks appended to its `tasks.md` — not spun out as a follow-up proposal.
 
-`docs/mvp-plan.md` says *what* gets built and when; OpenSpec changes say *what the
-behavior is*. They are not substitutes for each other.
-
 ## Working rhythm — required
 
-- **Append to [docs/devlog.md](docs/devlog.md) at the end of every working day.**
-  Five minutes, in English, committed. What shipped, what broke, the numbers you
-  measured with the command that produced them, and any decision you'd have to
-  explain to a stranger. Write it even on days when nothing worked — especially
-  then.
 - **Write an ADR when a decision is expensive to reverse** or when a reader would
   question it. Never edit an accepted ADR to reflect a reversal — mark it superseded
   and write a new one.
-
-Scope discipline: the Out of Scope list in `docs/PRD.md` §8 and the Non-Goals in
-`docs/TDR.md` §2 are decisions, not a backlog. A good idea arriving mid-build goes
-under `## Ideas for later` in the devlog, not into the code. `docs/mvp-plan.md`
-feature-freezes on day 25 — nothing new gets added to MVP scope after that.
 
 ## GIT
 
