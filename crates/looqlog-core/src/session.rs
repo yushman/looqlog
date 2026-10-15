@@ -28,6 +28,9 @@ use crate::timestamp::{ParseContext, TimeZonePolicy};
 /// Most rows one `window` call returns.
 pub const MAX_WINDOW_ROWS: usize = 1000;
 
+/// Per retained raw line: its `Box` in the deque plus allocator slack.
+const RAW_LINE_BYTES: usize = 16;
+
 /// Re-parse feeds retained lines to the parser in chunks of about this size.
 const REPARSE_CHUNK_BYTES: usize = 64 * 1024;
 
@@ -125,6 +128,7 @@ pub struct Session {
     parser: Parser,
     index: EntryIndex,
     raw: VecDeque<Box<[u8]>>,
+    raw_bytes: usize,
     /// Line number of `raw[0]`, 1-based.
     first_line: usize,
     pending: Vec<u8>,
@@ -148,6 +152,7 @@ impl Session {
             parser,
             index: EntryIndex::new(),
             raw: VecDeque::new(),
+            raw_bytes: 0,
             first_line: 1,
             pending: Vec::new(),
             evicted_lines: 0,
@@ -172,6 +177,7 @@ impl Session {
                     self.pending.extend_from_slice(&chunk[start..i]);
                     std::mem::take(&mut self.pending).into_boxed_slice()
                 };
+                self.raw_bytes += line.len();
                 self.raw.push_back(line);
                 start = i + 1;
             }
@@ -185,6 +191,7 @@ impl Session {
     pub fn finish(&mut self) {
         if !self.pending.is_empty() {
             let line = std::mem::take(&mut self.pending).into_boxed_slice();
+            self.raw_bytes += line.len();
             self.raw.push_back(line);
         }
         self.finished = true;
@@ -224,7 +231,7 @@ impl Session {
         let max = max.max(1);
         if self.raw.len() > max {
             let n = self.raw.len() - max;
-            self.raw.drain(..n);
+            self.raw_bytes -= self.raw.drain(..n).map(|l| l.len()).sum::<usize>();
             self.first_line += n;
             self.evicted_lines += n as u64;
         }
@@ -306,7 +313,13 @@ impl Session {
     /// Bytes held for retained raw lines — the part of memory that scales with input
     /// besides the index itself.
     pub fn retained_raw_bytes(&self) -> usize {
-        self.raw.iter().map(|l| l.len()).sum::<usize>() + self.pending.len()
+        self.raw_bytes + self.pending.len()
+    }
+
+    /// Estimated heap this session retains: raw lines plus parsed entries, calibrated
+    /// against `mem_probe -- session` (docs/devlog.md). The memory budget counts this.
+    pub fn retained_bytes(&self) -> usize {
+        self.retained_raw_bytes() + self.raw.len() * RAW_LINE_BYTES + self.index.retained_bytes()
     }
 
     pub fn stats(&self) -> StatsDto {
@@ -702,6 +715,37 @@ mod tests {
         \tat com.example.IoBridge.connect(IoBridge.java:10)\n\
         \tat com.example.Other.run(Other.java:20)\n\
         2026-08-09T10:00:01Z INFO all good\n";
+
+    #[test]
+    fn retained_bytes_grows_on_ingest_and_shrinks_on_eviction() {
+        let lines = [
+            "a=1 msg=one\n",
+            "b=2 msg=two\n",
+            "c=3 msg=three\n",
+            "d=4 msg=four\n",
+        ];
+        let feed = |max_lines| {
+            let mut s = Session::new(SessionConfig {
+                max_lines,
+                ..Default::default()
+            });
+            assert_eq!(s.retained_bytes(), 0);
+            s.ingest(lines[0].as_bytes());
+            s.force_detection();
+            let mut sizes = vec![s.retained_bytes()];
+            for line in &lines[1..] {
+                s.ingest(line.as_bytes());
+                sizes.push(s.retained_bytes());
+            }
+            sizes
+        };
+        let unbounded = feed(None);
+        assert!(unbounded.windows(2).all(|w| w[0] < w[1]), "{unbounded:?}");
+        let bounded = feed(Some(2));
+        assert_eq!(bounded[..2], unbounded[..2]);
+        assert!(bounded[3] < unbounded[3]);
+        assert!(bounded[3] < unbounded[2]);
+    }
 
     #[test]
     fn filter_and_search_combine() {

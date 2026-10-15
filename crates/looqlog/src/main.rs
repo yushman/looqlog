@@ -8,12 +8,11 @@ mod stdin;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
-use clap::Parser;
-
-use cli::{Cli, Mode};
+use cli::{Cli, FALLBACK_PORTS};
 use server::AppState;
-use source::Source;
+use source::Registry;
 
 const SSH_FORWARD_HINT: &str =
     "if this is a remote/headless machine, forward it with: ssh -L <port>:127.0.0.1:<port> <host>";
@@ -27,14 +26,14 @@ async fn main() {
         )
         .init();
 
-    let args = Cli::parse();
-    let mode = args.mode();
+    let (args, port_explicit) = Cli::parse_with_port_source();
+    let reads_stdin = args.reads_stdin();
 
-    // `cli` spec, resolved design.md open question: --max-lines is a no-op in file
-    // mode, but silently ignoring an explicit value is exactly the "quiet surprise"
-    // this project's testing rules forbid — say so.
-    if args.max_lines.is_some() && mode == Mode::File {
-        eprintln!("note: --max-lines has no effect in file mode (ignored)");
+    // `cli` spec: --max-lines only bounds the stdin source, but silently ignoring an
+    // explicit value is exactly the "quiet surprise" this project's testing rules
+    // forbid — say so.
+    if args.max_lines.is_some() && !reads_stdin {
+        eprintln!("note: --max-lines has no effect without stdin (ignored)");
     }
 
     let host = match args.resolved_host() {
@@ -56,82 +55,80 @@ async fn main() {
         );
     }
 
-    let addr = SocketAddr::new(host, args.port);
-    let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(listener) => listener,
-        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
-            eprintln!(
-                "error: port {} is already in use; try `--port 0` to pick a free port",
-                args.port
-            );
-            std::process::exit(1);
-        }
-        Err(err) => {
-            eprintln!("error: could not bind {addr}: {err}");
-            std::process::exit(1);
-        }
-    };
-    let actual_port = listener
+    let (listener, busy) = bind(host, args.port, port_explicit).await;
+    let bound = listener
         .local_addr()
-        .expect("bound listener has a local address")
-        .port();
-    let url = format!("http://{host}:{actual_port}");
+        .expect("bound listener has a local address");
+    let url = format!("http://{host}:{}", bound.port());
 
     // `security` spec: one random token per process, embedded in the served page and
-    // required by `/ws` and `/upload`. Generated once, so every page load for the life
-    // of this process — first load, reload, a second tab — can authenticate.
+    // required by `/ws`, `/upload` and close. Generated once, so every page load for
+    // the life of this process — first load, reload, a second tab — can authenticate.
     let token = generate_token();
 
-    let source = Arc::new(Mutex::new(Source::new(
-        mode == Mode::Stdin,
-        (mode == Mode::Stdin).then(|| args.max_lines_or_default()),
-    )));
-    let path = args.path.as_ref().filter(|_| mode == Mode::File);
-    let mode_json = match mode {
-        Mode::Stdin => {
-            stdin::spawn_stdin_reader(source.clone());
-            format!(
-                r#"{{"mode":"stdin","maxLines":{}}}"#,
-                args.max_lines_or_default()
-            )
+    let registry = Arc::new(Mutex::new(Registry::default()));
+    let mut lines = Vec::new();
+    for path in &args.paths {
+        // `file-ingest` spec: an unreadable path does not stop the server; its source
+        // shows the same error and offers an upload instead.
+        let (id, outcome) = source::open_argv(&registry, path);
+        match outcome {
+            Ok(None) => {}
+            Ok(Some(warning)) => println!("warning: {}: {warning}", path.display()),
+            Err(err) => eprintln!("error: {err}"),
         }
-        Mode::File => {
-            if let Some(path) = path {
-                // `file-ingest` spec: an unreadable path does not stop the server; the
-                // page shows the same error and offers an upload instead.
-                match source::open_argv(&source, path) {
-                    Ok(None) => {}
-                    Ok(Some(warning)) => println!("warning: {warning}"),
-                    Err(err) => eprintln!("error: {err}"),
-                }
+        lines.push((path.display().to_string(), id));
+    }
+    if reads_stdin {
+        let id = stdin::spawn_stdin_reader(&registry, args.max_lines_or_default());
+        lines.push((
+            format!("stdin (max-lines: {})", args.max_lines_or_default()),
+            id,
+        ));
+    }
+
+    let sweeper = registry.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(source::SWEEP_INTERVAL);
+        loop {
+            tick.tick().await;
+            let unloaded = sweeper
+                .lock()
+                .expect("registry lock poisoned")
+                .sweep(Instant::now());
+            if unloaded > 0 {
+                tracing::info!("unloaded {unloaded} upload(s) with no tab open");
             }
-            r#"{"mode":"file"}"#.to_string()
         }
-    };
+    });
 
     let state = Arc::new(AppState {
-        mode_json,
         token,
-        source,
-        bound: listener
-            .local_addr()
-            .expect("bound listener has a local address"),
+        registry,
+        max_lines: args.max_lines_or_default(),
+        bound,
     });
     let router = server::build_router(state);
 
-    let path_display = path.map(|p| p.display().to_string());
-    print_banner(
-        &url,
-        mode,
-        path_display.as_deref(),
-        args.max_lines_or_default(),
-    );
+    let source_urls: Vec<(String, String)> = lines
+        .into_iter()
+        .map(|(name, id)| (name, format!("{url}/l/{id}")))
+        .collect();
+    print_banner(&url, busy, &source_urls);
 
     if args.open && !args.no_browser {
-        if let Err(err) = webbrowser::open(&url) {
-            println!("could not open a browser automatically ({err})");
-            println!("open this URL manually: {url}");
-            println!("{SSH_FORWARD_HINT}");
+        let targets: Vec<&str> = if source_urls.is_empty() {
+            vec![url.as_str()]
+        } else {
+            source_urls.iter().map(|(_, u)| u.as_str()).collect()
+        };
+        for target in targets {
+            if let Err(err) = webbrowser::open(target) {
+                println!("could not open a browser automatically ({err})");
+                println!("open the URLs above manually");
+                println!("{SSH_FORWARD_HINT}");
+                break;
+            }
         }
     }
 
@@ -154,6 +151,41 @@ async fn main() {
     }
 }
 
+/// Binds `port`, or with no explicit `--port` the first free one of 7891–7900
+/// (`local-server` spec). Returns the listener and the busy default port it skipped, if
+/// any. Every failure exits with a message naming the port or range and `--port 0`.
+async fn bind(host: IpAddr, port: u16, explicit: bool) -> (tokio::net::TcpListener, Option<u16>) {
+    let ports = if explicit {
+        port..=port
+    } else {
+        FALLBACK_PORTS
+    };
+    for candidate in ports.clone() {
+        let addr = SocketAddr::new(host, candidate);
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => {
+                let busy = (candidate != *ports.start()).then_some(*ports.start());
+                return (listener, busy);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(err) => {
+                eprintln!("error: could not bind {addr}: {err}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if explicit {
+        eprintln!("error: port {port} is already in use; try `--port 0` to pick a free port");
+    } else {
+        eprintln!(
+            "error: ports {}–{} are all in use; try `--port 0` to pick a free port",
+            ports.start(),
+            ports.end()
+        );
+    }
+    std::process::exit(1);
+}
+
 /// 128 bits of OS-sourced randomness (`rand::thread_rng`, itself seeded from the
 /// OS CSPRNG), hex-encoded. `security` spec, "WebSocket token handshake".
 fn generate_token() -> String {
@@ -163,15 +195,17 @@ fn generate_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn print_banner(url: &str, mode: Mode, path: Option<&str>, max_lines: usize) {
+fn print_banner(url: &str, busy: Option<u16>, sources: &[(String, String)]) {
     println!("looqlog v{}", env!("CARGO_PKG_VERSION"));
-    println!("\u{2192} {url}");
-    match (mode, path) {
-        (Mode::File, Some(path)) => println!("  opening {path}"),
-        (Mode::File, None) => println!("  open a log file in the browser"),
-        (Mode::Stdin, _) => println!(
-            "  streaming stdin — connect a browser to view it live (max-lines: {max_lines})"
-        ),
+    if let Some(port) = busy {
+        println!("port {port} is busy (another looqlog?), using the next free one");
+    }
+    println!("\u{2192} {url}  (all sources)");
+    if sources.is_empty() {
+        println!("  open a log file in the browser");
+    }
+    for (name, source_url) in sources {
+        println!("  {name} \u{2192} {source_url}");
     }
     println!("Press Ctrl+C to quit");
 }

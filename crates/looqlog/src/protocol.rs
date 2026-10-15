@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use looqlog_core::dto::TimeRangeDto;
 use serde::{Deserialize, Serialize};
 
+use crate::source::{CloseReason, SourceRow};
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(
     tag = "type",
@@ -18,9 +20,12 @@ use serde::{Deserialize, Serialize};
     rename_all_fields = "camelCase"
 )]
 pub enum ClientMessage {
-    /// Must be the very first frame; the token never appears in the URL.
+    /// Must be the very first frame; the token never appears in the URL. `source` binds
+    /// the connection to one source; `None` is the landing's connection.
     Auth {
         token: String,
+        #[serde(default)]
+        source: Option<String>,
     },
     /// The whole view state. Starts a new generation unless the search fails to compile.
     Query {
@@ -70,6 +75,11 @@ pub enum ClientMessage {
     Stats {
         id: u64,
     },
+    /// Landing only: closes a source (refused for stdin).
+    Close {
+        id: u64,
+        source: String,
+    },
 }
 
 impl ClientMessage {
@@ -82,7 +92,8 @@ impl ClientMessage {
             | ClientMessage::Buckets { id, .. }
             | ClientMessage::SetFormat { id, .. }
             | ClientMessage::ToggleChain { id, .. }
-            | ClientMessage::Stats { id } => Some(*id),
+            | ClientMessage::Stats { id }
+            | ClientMessage::Close { id, .. } => Some(*id),
         }
     }
 }
@@ -121,8 +132,17 @@ pub enum ServerMessage {
     },
     /// stdin closed; retained entries stay queryable.
     Ended,
-    /// The source was replaced or re-parsed; the client must re-query.
+    /// The source was re-parsed; the client must re-query.
     Reset,
+    /// The connection's source is gone, or never existed in this process. Data requests
+    /// get errors from now on; the connection stays open.
+    Closed {
+        reason: CloseReason,
+    },
+    /// Landing only: every source, after auth and whenever the list changes.
+    Sources {
+        sources: Vec<SourceRow>,
+    },
 }
 
 #[cfg(test)]
@@ -181,9 +201,13 @@ mod tests {
         assert_eq!(
             msg,
             ClientMessage::Auth {
-                token: "deadbeef".into()
+                token: "deadbeef".into(),
+                source: None,
             }
         );
+        let msg: ClientMessage =
+            serde_json::from_str(r#"{"type":"auth","token":"t","source":"abcdefgh"}"#).unwrap();
+        assert!(matches!(msg, ClientMessage::Auth { source: Some(s), .. } if s == "abcdefgh"));
     }
 
     #[test]
@@ -205,6 +229,13 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ServerMessage::Evicted { count: 50 }).unwrap(),
             r#"{"type":"evicted","count":50}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ServerMessage::Closed {
+                reason: CloseReason::Unloaded
+            })
+            .unwrap(),
+            r#"{"type":"closed","reason":"unloaded"}"#
         );
     }
 

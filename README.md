@@ -1,6 +1,6 @@
 # looqlog
 
-Single-binary CLI that opens a local web UI for browsing a log file or a live stdin
+Single-binary CLI that opens a local web UI for browsing log files and a live stdin
 stream. Parsing happens in the local `looqlog` process and the browser only shows the
 result, so log contents never leave your machine.
 
@@ -20,7 +20,7 @@ result, so log contents never leave your machine.
 > and live stdin streaming exist
 > end to end. Parsing, indexing, filtering and search run natively in the `looqlog`
 > process; the page asks for the rows it shows and never holds the whole log, so a
-> large file neither freezes the page nor fills the tab's memory. Stdin mode holds a
+> large file neither freezes the page nor fills the tab's memory. Stdin holds a
 > bounded ring buffer so lines emitted before a
 > browser connects are not lost, and a slow client never blocks the producer. A
 > `uPlot` histogram timeline shows entries per time bucket with drag-to-select range
@@ -114,29 +114,53 @@ cargo build --release
 
 ## Usage
 
-looqlog has two run modes, a file or a stdin stream. In both the log is read and parsed
-by the local `looqlog` process and reaches the page over a localhost connection, so it
-never leaves your machine on the default bind — it does cross a process boundary, and
-nothing claims it stays inside the browser. See
+looqlog reads log files and a stdin stream, each as its own **source**. Every source is
+read and parsed by the local `looqlog` process and reaches the page over a localhost
+connection, so it never leaves your machine on the default bind — it does cross a process
+boundary, and nothing claims it stays inside the browser. See
 [ADR-0010](docs/adr/0010-parse-on-the-backend-thin-client.md) for the reasoning.
 
-### File mode
+### Sources, the source list and tabs
 
 ```bash
-looqlog app.log
+looqlog app.log                      # one file
+looqlog app.log worker.log           # several files, each its own source
+myapp | looqlog app.log              # stdin and a file side by side
 ```
 
-This starts the server, reads and parses `app.log`, and the printed URL opens straight
+The banner prints the source list URL and one URL per source:
+
+```
+→ http://127.0.0.1:7891  (all sources)
+  app.log → http://127.0.0.1:7891/l/k3x9q2ma
+  stdin (max-lines: 100000) → http://127.0.0.1:7891/l/p7d4ve2c
+```
+
+- **`/` is the source list**: every source with its kind, size, state (parsing, live,
+  ended/loaded, error) and number of open tabs, a link to each, a **Close** button (for
+  everything except stdin), and a file picker/drop target. A new tab at `/` always starts
+  here — it never inherits another tab's log or filters.
+- **`/l/<id>` is one source.** A tab stays bound to its source; a reload keeps it. The id
+  is random, so a link from an earlier run never opens a different log: it says the source
+  is gone (unknown, closed, unloaded) and offers an upload instead of an empty table.
+
+### Files
+
+Each path on the command line is read and parsed at startup, and its URL opens straight
 into the log — no file picker step; progress is shown while a large file is still being
-read. The file is read once, at startup: lines appended later are not followed. If the
-path cannot be read, `looqlog` says so on the terminal and keeps serving, and the page
-shows the same error with a way to open another file.
+read. A file is read once: lines appended later are not followed. If a path cannot be
+read, `looqlog` says so on the terminal and keeps serving, and that source shows the same
+error with a way to open another file. A file named on the command line stays until
+`looqlog` exits or you close it from the source list.
 
-Any page can also open a file through its picker or by dropping it onto the page. That
-file is **uploaded to the local `looqlog` process** (not to any other server) and replaces
-the one shown, in every open tab. A failed upload leaves the current log as it was.
+A file can also be picked or dropped on the source list. It is **uploaded to the local
+`looqlog` process** (not to any other server), becomes a new source, and the tab opens it.
+It never replaces what another tab shows; to open another file from a log's tab, use the
+source list. An upload is kept while a tab shows it: once no tab has been connected to it
+for **10 minutes** it is unloaded, and a tab coming back later (say, after the laptop
+slept) says so. A failed upload leaves no source behind and touches no other source.
 
-### Stdin mode
+### Stdin
 
 ```bash
 myapp | looqlog
@@ -144,8 +168,9 @@ myapp | looqlog
 tail -f /var/log/app.log | looqlog --stdin
 ```
 
-Lines from stdin are parsed by `looqlog` as they arrive; connected pages are told the
-stream grew and fetch the rows they show over the localhost WebSocket.
+When stdin is a pipe (or `--stdin` is passed) `looqlog` adds a stdin source, alongside any
+files. Lines are parsed as they arrive; connected pages are told the stream grew and fetch
+the rows they show over the localhost WebSocket.
 
 The backend retains the most recent `--max-lines` lines (default 100,000), filled from
 process start regardless of whether a browser is connected, so `myapp | looqlog` followed
@@ -156,14 +181,24 @@ lines are evicted, and the page shows a marker above the first row naming how ma
 never a silently shorter tail. The page also
 shows a live/connecting/ended/disconnected indicator, a lines/sec counter, autoscroll
 that pauses when you scroll away, and reconnects with backoff if the connection drops.
+The stdin source cannot be closed: stopping reading would block or kill the program
+writing to it.
+
+**Several streams are several processes.** One `looqlog` reads one stdin. Pipe a second
+stream into a second `looqlog`: with no `--port`, it takes the next free port from 7891 to
+7900 and says which port was busy.
 
 ### Other flags
 
 ```bash
 looqlog --port 9000 app.log     # pick a port (0 = random free port)
-looqlog --open app.log          # auto-open the default browser once ready
+looqlog --open a.log b.log      # open one browser tab per source (the source list if none)
 looqlog --host 0.0.0.0 app.log  # expose beyond localhost — prints a mandatory warning
 ```
+
+With no `--port`, `looqlog` binds 7891, or the next free port up to 7900 when that one is
+busy; when all ten are busy it exits and suggests `--port 0`. An explicit `--port` that is
+busy fails the same way instead of falling back.
 
 Run `looqlog --help` for the full flag list (`--port`, `--host`, `--open`,
 `--no-browser`, `--stdin`, `--max-lines`).
@@ -173,7 +208,8 @@ Run `looqlog --help` for the full flag list (`--port`, `--host`, `--open`,
 looqlog auto-detects **JSON Lines**, **logfmt** and **plain text** by sampling the first
 100 non-empty lines; a format wins only if at least 80% of them parse under it. You can
 override the choice with `#format=json|logfmt|plain` in the URL. The override re-parses the
-source itself, so every open tab on the same `looqlog` process switches with it.
+source itself, so every open tab on that source switches with it; other sources are not
+affected.
 
 Plain text is not a dead end. Most real log lines are a *prefix* carrying when and how
 bad, followed by a *payload* carrying everything else, so looqlog reads both:
@@ -319,7 +355,9 @@ timezone override, the table's column widths and which side panes are collapsed 
 round-trip through the URL hash (`#filter=...&q=...&range=...&cols=...&panes=...`),
 written a moment after you stop changing
 something (not on every keystroke, so typing doesn't flood your browser history) and
-applied automatically when you open the same URL while `looqlog` shows the same log. Column
+applied automatically when you open the same URL while its source is still loaded — the
+`/l/<id>` part names a source of the running `looqlog` process, so the link does not work
+on another machine or after that process exits. Column
 widths are `cols=<#>,<timestamp>,<level>` in `rem`, in that order; the message column is
 derived from the other three and so has no place in the grammar, and widths that are all
 at their defaults are left out of the link entirely. Collapsed panes are
@@ -348,13 +386,13 @@ Inline styles are **not** permitted: `style-src` is `'self'`, with no `'unsafe-i
 virtual-scrolled table positions its rows through rules in the page's own
 stylesheet rather than through `style` attributes.
 
-`/ws` (every query the page makes) and `/upload` (a file picked in the page) are
-protected two ways:
+`/ws` (every query the page makes and the source list), `/upload` (a file picked in the
+page) and `/sources/<id>/close` are protected two ways:
 
 - **Origin and Host check.** A request whose `Origin` doesn't match its own `Host`, or
   whose `Host` doesn't name the address `looqlog` is bound to (a DNS-rebound name such
   as `attacker.example`), is refused with `403` before any log data is sent and before
-  any uploaded byte is parsed.
+  any uploaded byte is parsed or any source is closed.
 - **Per-process token handshake.** The served page embeds a random token generated
   once when `looqlog` starts. The page's own JS sends it as the first message on every
   `/ws` connection and in the `X-Looqlog-Token` header of an upload (never in the URL
@@ -387,6 +425,14 @@ JSON Lines and 10.2x for logfmt. The limits follow from the worst of those:
 - **Above 400 MB** looqlog refuses the file (up to ~4 GB of memory at the measured worst
   case) and explains why, rather than starting a parse that could fail partway through.
   Split the file (e.g. by time range) or filter it down first.
+
+All sources of one process share a fixed **4 GB memory budget**, counted from what each
+source actually retains (calibrated against the same measurement, see
+[ADR-0011](docs/adr/0011-sources-owned-by-process-or-tabs.md)). When a new upload does not
+fit, uploads that no tab is showing are unloaded oldest first; if it still does not fit,
+the upload is refused with an error naming the budget and every other source stays as it
+was. A file from the command line that does not fit stops being read and shows the same
+error. Files from the command line and stdin are never unloaded to make room.
 
 ## Error states
 

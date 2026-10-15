@@ -12,13 +12,15 @@ import "./looqlog-entry-table";
 import "./looqlog-entry-detail";
 import "./looqlog-filter-bar";
 import "./looqlog-workspace";
+import "./looqlog-uploader";
 
 import { DEFAULT_COLUMN_WIDTHS, type ColumnWidths } from "../column-widths";
 import type { CollapsiblePane } from "../panes";
 import { QueryClient, socketUrl, type ConnectionState } from "../query-client";
 import type { Notification } from "../query-types";
+import { goneMessage } from "../routing";
 import { readAuthToken } from "../token";
-import { HashWriter } from "../url-hash";
+import { HashWriter, SHARE_CAVEAT } from "../url-hash";
 import type { LooqlogDetection } from "./looqlog-detection";
 import type { LooqlogDiagnostics } from "./looqlog-diagnostics";
 import type { LooqlogEntryDetail } from "./looqlog-entry-detail";
@@ -61,6 +63,8 @@ export class LooqlogLiveTail extends HTMLElement {
   /** Lines seen at the last rate sample: retained entries plus evicted lines. */
   private lastRateCount: number | null = null;
   private evicted = 0;
+  /** Set once the backend says the stream's source is gone (a link from an earlier run). */
+  private gone = false;
 
   /** The table owns the drag, the workspace owns the toggles; this shell owns what
    * the copy-link affordance puts in the URL. A stdin session has no file for a
@@ -161,6 +165,7 @@ export class LooqlogLiveTail extends HTMLElement {
     const client = new QueryClient({
       url: socketUrl(),
       token: readAuthToken(),
+      source: this.getAttribute("source-id"),
       onState: (state) => this.renderConnState(state),
       onNotification: (n) => this.onNotification(n),
       onConnected: () => void this.onConnected(),
@@ -179,6 +184,9 @@ export class LooqlogLiveTail extends HTMLElement {
       {
         onStateChange: () => this.scheduleHashWrite(),
         onError: (message) => {
+          if (this.gone) {
+            return;
+          }
           this.errorEl.hidden = false;
           this.errorEl.textContent = message;
         },
@@ -241,9 +249,28 @@ export class LooqlogLiveTail extends HTMLElement {
       case "ended":
         void this.controller.refreshStats(true);
         break;
+      case "closed":
+        this.showGone(goneMessage(n.reason));
+        break;
       case "progress":
+      case "sources":
         break;
     }
+  }
+
+  /** Never an empty table: the stream's place says why it is gone and offers an upload. */
+  private showGone(message: string): void {
+    this.gone = true;
+    const prompt = document.createElement("div");
+    prompt.className = "unopened-prompt";
+    prompt.innerHTML = `
+      <p class="gone-note"></p>
+      <looqlog-uploader></looqlog-uploader>
+      <p><a href="/">Back to the source list</a></p>
+    `;
+    (prompt.querySelector(".gone-note") as HTMLParagraphElement).textContent = message;
+    this.workspace.pane("table").replaceChildren(prompt);
+    this.workspace.setTimelineVisible(false);
   }
 
   private scheduleHashWrite(): void {
@@ -261,8 +288,7 @@ export class LooqlogLiveTail extends HTMLElement {
   /** Same caveat, same "flush before copy" reasoning as `looqlog-app.ts`. */
   private copyShareableLink(): void {
     this.hashWriter.flush();
-    const caveat =
-      "Copied — this link encodes your search text and filter values, which are fragments of the log itself.";
+    const caveat = SHARE_CAVEAT;
     navigator.clipboard
       .writeText(location.href)
       .then(() => {

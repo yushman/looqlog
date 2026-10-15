@@ -1,9 +1,9 @@
-// The shell. In file mode it owns the source-level state — what file is open, how far
-// its ingest got, what failed — the URL hash and the upload flow, and leaves the view
-// (filters, table, timeline, detail) to a `ViewController` over the backend
-// (ADR-0010). Children only dispatch events; they never hold source state themselves.
+// The shell. It routes on the path (`/` is the landing, `/l/<id>` one source). For a
+// file source it owns the source-level state — what file it is, how far its ingest got,
+// what failed, whether it is gone — and the URL hash, and leaves the view (filters,
+// table, timeline, detail) to a `ViewController` over the backend (ADR-0010). Children
+// only dispatch events; they never hold source state themselves.
 
-import "./looqlog-drop-target";
 import "./looqlog-detection";
 import "./looqlog-diagnostics";
 import "./looqlog-timeline";
@@ -12,18 +12,18 @@ import "./looqlog-entry-detail";
 import "./looqlog-live-tail";
 import "./looqlog-filter-bar";
 import "./looqlog-workspace";
+import "./looqlog-landing";
+import "./looqlog-uploader";
 
-import { looksBinary, SNIFF_BYTES } from "../binary-detect";
 import { DEFAULT_COLUMN_WIDTHS, type ColumnWidths } from "../column-widths";
-import { formatBytes, HARD_CAP_BYTES, WARN_THRESHOLD_BYTES } from "../limits";
 import type { CollapsiblePane } from "../panes";
 import { QueryClient, socketUrl, type ConnectionState } from "../query-client";
-import type { Notification, SourceInfoDto, StatsReplyDto } from "../query-types";
+import type { CloseReason, Notification, SourceInfoDto, StatsReplyDto } from "../query-types";
+import { goneMessage, routeFor } from "../routing";
 import { readAuthToken } from "../token";
-import { decodeHash, HashWriter, type DecodedHash } from "../url-hash";
+import { decodeHash, HashWriter, SHARE_CAVEAT, type DecodedHash } from "../url-hash";
 import type { LooqlogDetection } from "./looqlog-detection";
 import type { LooqlogDiagnostics } from "./looqlog-diagnostics";
-import type { LooqlogDropTarget } from "./looqlog-drop-target";
 import type { LooqlogEntryDetail } from "./looqlog-entry-detail";
 import type { LooqlogEntryTable } from "./looqlog-entry-table";
 import type { LooqlogFilterBar } from "./looqlog-filter-bar";
@@ -36,14 +36,7 @@ const TABLE_REFRESH_MS = 300;
 const TIMELINE_REFRESH_MS = 500;
 const STATS_REFRESH_MS = 1000;
 
-/** A large or binary file awaiting an explicit continue/cancel before it is uploaded
- * (`error-states` spec). */
-interface PendingConfirm {
-  file: File;
-  message: string;
-}
-
-/** Mirrors the `__LOOQLOG_MODE__` JSON substituted server-side (`crates/looqlog/src/main.rs`). */
+/** Mirrors the `__LOOQLOG_MODE__` JSON substituted server-side (`crates/looqlog/src/server.rs`). */
 type RunMode = { mode: "file" } | { mode: "stdin"; maxLines: number };
 
 /** Reads the `#mode-template` placeholder. Falls back to file mode both when the element
@@ -75,15 +68,12 @@ export class LooqlogApp extends HTMLElement {
   private source: SourceInfoDto | null = null;
   private stats: StatsReplyDto["stats"] | null = null;
   private progress: { bytes: number; total: number; done: boolean } | null = null;
-  /** The last failure that is not the source's own (an upload rejected, a request
-   * failed), shown in a persistent banner until dismissed or superseded. */
+  /** The last failure that is not the source's own (a request failed), shown in a
+   * persistent banner until dismissed or superseded. */
   private errorMessage: string | null = null;
-  private pendingConfirm: PendingConfirm | null = null;
-  private uploading: string | null = null;
   private connState: ConnectionState = "connecting";
-  /** Set while our own `set_format` is in flight: the `reset` it causes keeps the
-   * view, where a `reset` for a replaced source starts a fresh one. */
-  private expectingFormatReset = false;
+  /** Set once the backend says this tab's source is gone. */
+  private closed: CloseReason | null = null;
   private firstConnect = true;
 
   private formatOverride: string | null = null;
@@ -100,26 +90,32 @@ export class LooqlogApp extends HTMLElement {
   private statsTimer: ReturnType<typeof setTimeout> | null = null;
 
   private workspace!: LooqlogWorkspace;
-  private dropTarget!: LooqlogDropTarget;
   private timelineEl!: LooqlogTimeline;
   private tableEl!: LooqlogEntryTable;
   private filterBarEl!: LooqlogFilterBar;
   private statusEl!: HTMLParagraphElement;
   private errorBannerEl!: HTMLDivElement;
-  private confirmBannerEl!: HTMLDivElement;
   private connNoteEl!: HTMLParagraphElement;
   private sizeNoteEl!: HTMLParagraphElement;
   private hashNoticeEl!: HTMLParagraphElement;
   private copyStatusEl!: HTMLParagraphElement;
-  /** Where the drop target lives once a file is open: the rail's collapsed "open
-   * another file" section. Before that it sits in the center pane. */
-  private openFileBodyEl!: HTMLElement;
+  /** The center pane's prompt when there is nothing to show: the source failed, is
+   * gone, or has not produced anything yet. Holds the upload target. */
   private unopenedEl!: HTMLElement;
+  private goneEl!: HTMLParagraphElement;
 
   connectedCallback(): void {
+    const route = routeFor(location.pathname);
+    if (route.kind === "landing") {
+      this.innerHTML = `<looqlog-landing></looqlog-landing>`;
+      return;
+    }
     const runMode = readRunMode();
     if (runMode.mode === "stdin") {
-      this.innerHTML = `<looqlog-live-tail max-lines="${runMode.maxLines}"></looqlog-live-tail>`;
+      const liveTail = document.createElement("looqlog-live-tail");
+      liveTail.setAttribute("max-lines", String(runMode.maxLines));
+      liveTail.setAttribute("source-id", route.id);
+      this.replaceChildren(liveTail);
       return;
     }
 
@@ -137,11 +133,6 @@ export class LooqlogApp extends HTMLElement {
         <span id="error-banner-text"></span>
         <button type="button" id="error-banner-dismiss" aria-label="Dismiss">&times;</button>
       </div>
-      <div class="confirm-banner" id="confirm-banner" hidden>
-        <span id="confirm-banner-text"></span>
-        <button type="button" id="confirm-continue">Continue</button>
-        <button type="button" id="confirm-cancel">Cancel</button>
-      </div>
       <p class="provisional-note size-note" id="size-note" hidden></p>
       <p class="hash-notice" id="hash-notice" hidden></p>
     `;
@@ -150,7 +141,10 @@ export class LooqlogApp extends HTMLElement {
     ws.pane("rail-secondary").innerHTML = `
       <details class="rail-section" id="open-file-section">
         <summary><span class="rail-section-title">Open another file</span></summary>
-        <div class="rail-section-body" id="open-file-body"></div>
+        <div class="rail-section-body">
+          <p class="privacy-note">This tab stays on this log. Other files open from the source list.</p>
+          <a href="/" target="_blank" rel="noopener">Source list in a new tab</a>
+        </div>
       </details>
       <looqlog-detection></looqlog-detection>
       <looqlog-diagnostics></looqlog-diagnostics>
@@ -163,7 +157,7 @@ export class LooqlogApp extends HTMLElement {
           <p class="privacy-note">
             The file is read by the local <code>looqlog</code> process and never leaves
             the machine: it reaches this page over a local connection on the default
-            bind (ADR-0010). A file picked or dropped here is uploaded to that process,
+            bind (ADR-0010). A file uploaded from the source list goes to that process,
             not to any server elsewhere.
           </p>
         </div>
@@ -177,8 +171,12 @@ export class LooqlogApp extends HTMLElement {
       </details>
     `;
     ws.pane("table").innerHTML = `
-      <div class="unopened-prompt" id="unopened"></div>
-      <looqlog-entry-table hidden></looqlog-entry-table>
+      <div class="unopened-prompt" id="unopened" hidden>
+        <p class="gone-note" id="gone-note" hidden></p>
+        <looqlog-uploader></looqlog-uploader>
+        <p><a href="/">Back to the source list</a></p>
+      </div>
+      <looqlog-entry-table></looqlog-entry-table>
     `;
     ws.pane("detail").innerHTML = `<looqlog-entry-detail></looqlog-entry-detail>`;
 
@@ -187,37 +185,18 @@ export class LooqlogApp extends HTMLElement {
     this.filterBarEl = this.querySelector("looqlog-filter-bar") as LooqlogFilterBar;
     const detailEl = this.querySelector("looqlog-entry-detail") as LooqlogEntryDetail;
     this.statusEl = this.querySelector("#status") as HTMLParagraphElement;
-    this.openFileBodyEl = this.querySelector("#open-file-body") as HTMLElement;
     this.unopenedEl = this.querySelector("#unopened") as HTMLElement;
+    this.goneEl = this.querySelector("#gone-note") as HTMLParagraphElement;
     this.errorBannerEl = this.querySelector("#error-banner") as HTMLDivElement;
-    this.confirmBannerEl = this.querySelector("#confirm-banner") as HTMLDivElement;
     this.connNoteEl = this.querySelector("#conn-note") as HTMLParagraphElement;
     this.sizeNoteEl = this.querySelector("#size-note") as HTMLParagraphElement;
     this.hashNoticeEl = this.querySelector("#hash-notice") as HTMLParagraphElement;
     this.copyStatusEl = this.querySelector("#copy-status") as HTMLParagraphElement;
     this.workspace.setTimelineVisible(false);
 
-    // The drop target is one element that moves between the center pane (nothing
-    // open) and the rail (a file is open), keeping its listeners and picker state.
-    this.dropTarget = document.createElement("looqlog-drop-target") as LooqlogDropTarget;
-    this.unopenedEl.appendChild(this.dropTarget);
-
     (this.querySelector("#error-banner-dismiss") as HTMLButtonElement).addEventListener("click", () => {
       this.errorMessage = null;
       this.renderError();
-    });
-    (this.querySelector("#confirm-continue") as HTMLButtonElement).addEventListener("click", () => {
-      const pending = this.pendingConfirm;
-      if (!pending) {
-        return;
-      }
-      this.pendingConfirm = null;
-      this.renderConfirm();
-      void this.openFile(pending.file, { skipPreflight: true });
-    });
-    (this.querySelector("#confirm-cancel") as HTMLButtonElement).addEventListener("click", () => {
-      this.pendingConfirm = null;
-      this.renderConfirm();
     });
 
     if (location.hash.length > 1) {
@@ -229,9 +208,6 @@ export class LooqlogApp extends HTMLElement {
       this.tzOffsetMinutes = this.pendingHash.tzOffsetMinutes;
     }
 
-    this.dropTarget.addEventListener("file-selected", (event) => {
-      void this.openFile((event as CustomEvent<File>).detail);
-    });
     this.tableEl.addEventListener("selection-change", (event) => {
       // A selection whose only visible effect is inside a collapsed pane looks like
       // a broken click, so selecting opens the pane.
@@ -254,6 +230,7 @@ export class LooqlogApp extends HTMLElement {
     const client = new QueryClient({
       url: socketUrl(),
       token: readAuthToken(),
+      source: route.id,
       onState: (state) => this.onConnState(state),
       onNotification: (n) => this.onNotification(n),
       onConnected: () => void this.onConnected(),
@@ -272,6 +249,9 @@ export class LooqlogApp extends HTMLElement {
       {
         onStateChange: () => this.scheduleHashWrite(),
         onError: (message) => {
+          if (this.closed !== null) {
+            return; // the gone-source state already says why requests fail
+          }
           this.errorMessage = message;
           this.renderError();
         },
@@ -313,11 +293,9 @@ export class LooqlogApp extends HTMLElement {
   }
 
   private async applyFormatOverride(): Promise<void> {
-    this.expectingFormatReset = true;
     try {
       await this.controller.session.setFormat(this.formatOverride, this.tzOffsetMinutes);
     } catch (err) {
-      this.expectingFormatReset = false;
       this.errorMessage = `could not apply the format override: ${err instanceof Error ? err.message : String(err)}`;
       this.renderError();
     }
@@ -362,31 +340,20 @@ export class LooqlogApp extends HTMLElement {
         this.renderStatus();
         break;
       case "reset":
-        void this.onReset();
+        // This source was re-parsed, by this tab or another one on it: same lines,
+        // same ordinals, so the view stays and re-queries.
+        void this.loadStats().then(() => this.controller.runQuery());
+        break;
+      case "closed":
+        this.closed = n.reason;
+        this.errorMessage = null;
+        this.renderSource();
         break;
       case "evicted":
       case "ended":
+      case "sources":
         break;
     }
-  }
-
-  private async onReset(): Promise<void> {
-    if (this.expectingFormatReset) {
-      this.expectingFormatReset = false;
-      await this.loadStats();
-      await this.controller.runQuery();
-      return;
-    }
-    // A replaced source: its ordinals, fields and values mean nothing to this view.
-    this.controller.session.forgetToggles();
-    this.controller.resetState();
-    this.controller.attach();
-    this.progress = null;
-    if (this.formatOverride !== null || this.tzOffsetMinutes !== null) {
-      await this.applyFormatOverride();
-    }
-    await this.loadStats();
-    await this.controller.runQuery();
   }
 
   private throttle(which: "table" | "timeline", ms: number, fn: () => void): void {
@@ -410,29 +377,18 @@ export class LooqlogApp extends HTMLElement {
     }, STATS_REFRESH_MS);
   }
 
-  /** Shows the workspace once there is a source with entries (or one being read), the
-   * prompt otherwise, and the source's own error or size warning. */
+  /** Shows the workspace while the source has entries (or is being read), the prompt
+   * with an upload target when it failed or is gone — never an empty table — and the
+   * source's own error or size warning. */
   private renderSource(): void {
-    const source = this.source;
-    const hasData = (this.stats?.entries ?? 0) > 0 || (source?.name != null && source.error === null);
-    if (hasData) {
-      if (this.dropTarget.parentElement !== this.openFileBodyEl) {
-        this.openFileBodyEl.appendChild(this.dropTarget);
-      }
-      this.unopenedEl.hidden = true;
-      this.tableEl.hidden = false;
-      this.workspace.setTimelineVisible(true);
-    } else {
-      if (this.dropTarget.parentElement !== this.unopenedEl) {
-        this.unopenedEl.appendChild(this.dropTarget);
-      }
-      this.unopenedEl.hidden = false;
-      this.tableEl.hidden = true;
-      this.workspace.setTimelineVisible(false);
-    }
-    this.dropTarget.setHintHtml(
-      source?.error ? "Open a different log file below." : "Open a log file below.",
-    );
+    const source = this.closed === null ? this.source : null;
+    const failed = source?.error != null && (this.stats?.entries ?? 0) === 0;
+    const prompt = this.closed !== null || failed;
+    this.unopenedEl.hidden = !prompt;
+    this.tableEl.hidden = prompt;
+    this.workspace.setTimelineVisible(source !== null && !prompt);
+    this.goneEl.hidden = this.closed === null;
+    this.goneEl.textContent = this.closed === null ? "" : goneMessage(this.closed);
     this.sizeNoteEl.hidden = !source?.warning;
     this.sizeNoteEl.textContent = source?.warning ? `${source.name}: ${source.warning}` : "";
     if (source?.error) {
@@ -443,15 +399,15 @@ export class LooqlogApp extends HTMLElement {
   }
 
   private renderStatus(): void {
-    const name = this.uploading ?? this.source?.name ?? null;
+    const name = this.closed === null ? (this.source?.name ?? null) : null;
     const stats = this.stats;
     if (name === null) {
-      this.statusEl.textContent = this.connState === "connecting" ? "Connecting…" : "";
+      this.statusEl.textContent = this.connState === "connecting" && this.closed === null ? "Connecting…" : "";
       this.statusEl.className = "status";
       return;
     }
     const progress = this.progress;
-    if (this.uploading !== null || (progress && !progress.done)) {
+    if (progress && !progress.done) {
       const pct = progress && progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0;
       this.statusEl.textContent = `Parsing ${name}... ${pct}% (${this.controller.session.counts.total} entries so far)`;
       this.statusEl.className = "status parsing";
@@ -494,8 +450,7 @@ export class LooqlogApp extends HTMLElement {
    * URL reflects what is on screen right now. */
   private copyShareableLink(): void {
     this.hashWriter.flush();
-    const caveat =
-      "Copied — this link encodes your search text and filter values, which are fragments of the log itself.";
+    const caveat = SHARE_CAVEAT;
     navigator.clipboard
       .writeText(location.href)
       .then(() => {
@@ -554,100 +509,11 @@ export class LooqlogApp extends HTMLElement {
       notices.length > 0 ? `From the shared URL, could not be applied: ${notices.join("; ")}.` : "";
   }
 
-  /** Uploads `file` to the local backend (`file-ingest` spec). Checks that need no
-   * upload — empty, above the cap, large or binary-looking — run first. A failed
-   * upload leaves the current file as it was. */
-  private async openFile(file: File, opts: { skipPreflight?: boolean } = {}): Promise<void> {
-    this.errorMessage = null;
-    this.renderError();
-
-    if (file.size === 0) {
-      this.errorMessage = `${file.name} is empty — there is nothing to parse.`;
-      this.renderError();
-      return;
-    }
-    const capBytes = this.source?.capBytes ?? HARD_CAP_BYTES;
-    const warnBytes = this.source?.warnBytes ?? WARN_THRESHOLD_BYTES;
-    if (!opts.skipPreflight) {
-      if (file.size > capBytes) {
-        this.errorMessage =
-          `${file.name} is ${formatBytes(file.size)}, above the ${formatBytes(capBytes)} limit: the looqlog ` +
-          `process cannot hold the index for a file that size (measured at up to ~10x the file size in ` +
-          `memory). Split the file (e.g. by time range) or filter it down before opening, then retry.`;
-        this.renderError();
-        return;
-      }
-      if (file.size > warnBytes) {
-        this.pendingConfirm = {
-          file,
-          message:
-            `${file.name} is ${formatBytes(file.size)} — parsing a file this large takes a while and the ` +
-            `looqlog process may use several times that in memory. Continue?`,
-        };
-        this.renderConfirm();
-        return;
-      }
-      try {
-        const head = await file.slice(0, SNIFF_BYTES).arrayBuffer();
-        if (looksBinary(new Uint8Array(head))) {
-          this.pendingConfirm = {
-            file,
-            message: `${file.name} doesn't look like a text log file (found binary data near the start). Proceed anyway?`,
-          };
-          this.renderConfirm();
-          return;
-        }
-      } catch (err) {
-        this.errorMessage = `couldn't read ${file.name}: ${String(err)}`;
-        this.renderError();
-        return;
-      }
-    }
-
-    this.uploading = file.name;
-    this.progress = { bytes: 0, total: file.size, done: false };
-    this.dropTarget.setDisabled(true);
-    this.hashNoticeEl.hidden = true;
-    this.copyStatusEl.hidden = true;
-    this.renderStatus();
-    try {
-      const response = await fetch("/upload", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/octet-stream",
-          "X-Looqlog-Token": readAuthToken(),
-          "X-Looqlog-Filename": encodeURIComponent(file.name),
-        },
-        body: file,
-      });
-      if (!response.ok) {
-        const reason = await response
-          .json()
-          .then((body: { error?: string }) => body.error)
-          .catch(() => undefined);
-        this.errorMessage = `could not open ${file.name}: ${reason ?? `HTTP ${response.status}`}`;
-      }
-    } catch (err) {
-      this.errorMessage = `could not upload ${file.name} to looqlog: ${String(err)}`;
-    } finally {
-      this.uploading = null;
-      this.dropTarget.setDisabled(false);
-      this.renderError();
-      await this.loadStats();
-    }
-  }
-
   /** `error-states` spec, "Errors are reachable, not transient": a persistent banner,
    * independent of the status line. */
   private renderError(): void {
     this.errorBannerEl.hidden = this.errorMessage === null;
     (this.querySelector("#error-banner-text") as HTMLSpanElement).textContent = this.errorMessage ?? "";
-  }
-
-  private renderConfirm(): void {
-    this.confirmBannerEl.hidden = this.pendingConfirm === null;
-    (this.querySelector("#confirm-banner-text") as HTMLSpanElement).textContent =
-      this.pendingConfirm?.message ?? "";
   }
 }
 

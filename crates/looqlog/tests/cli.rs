@@ -296,6 +296,75 @@ fn occupied_port_fails_cleanly_naming_the_port() {
     drop(occupying);
 }
 
+/// `local-server`, "Second process falls back" and "Whole default range busy": with no
+/// `--port`, 7891 busy means the next free port up to 7900; all of them busy fails.
+/// One test, because both scenarios hold the same fixed ports.
+#[test]
+fn default_port_falls_back_within_the_range_and_fails_when_it_is_full() {
+    let holders: Vec<Option<TcpListener>> = (7891..=7900)
+        .map(|p| TcpListener::bind(("127.0.0.1", p)).ok())
+        .collect();
+    let output = Command::new(bin())
+        .arg("--stdin")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run looqlog with the whole default range held");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("7891") && stderr.contains("7900") && stderr.contains("--port 0"),
+        "error should name the range and suggest --port 0:\n{stderr}"
+    );
+    assert!(!stderr.to_lowercase().contains("panic"), "{stderr}");
+
+    // Free everything but 7891 that this test held; whatever else is busy stays busy.
+    let mut holders = holders.into_iter();
+    let _held_7891 = holders.next().unwrap();
+    drop(holders.collect::<Vec<_>>());
+    let mut child = Command::new(bin())
+        .arg("--stdin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn looqlog without --port");
+    let (stdout, stderr) = read_all_nonblocking(&mut child, Duration::from_millis(500));
+    let port = extract_port(&stdout).unwrap_or_else(|| panic!("no port in:\n{stdout}{stderr}"));
+    assert!((7892..=7900).contains(&port), "bound {port}:\n{stdout}");
+    assert!(
+        stdout.contains("port 7891 is busy"),
+        "the banner should say 7891 was busy:\n{stdout}"
+    );
+}
+
+/// `cli`, "Several paths" and "Banner lists every source".
+#[test]
+fn banner_lists_the_landing_and_every_source() {
+    let a = temp_log("banner-a.log", "level=info msg=a\n");
+    let b = temp_log("banner-b.log", "level=info msg=b\n");
+    let (mut child, port) =
+        spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[&a, &b]));
+    let (stdout, _) = read_all_nonblocking(&mut child, Duration::from_millis(100));
+    assert!(
+        stdout.contains(&format!("http://127.0.0.1:{port}  (all sources)")),
+        "{stdout}"
+    );
+    let source_lines: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains(&format!("http://127.0.0.1:{port}/l/")))
+        .collect();
+    assert_eq!(source_lines.len(), 3, "{stdout}");
+    assert!(source_lines[0].contains("banner-a.log"));
+    assert!(source_lines[1].contains("banner-b.log"));
+    assert!(source_lines[2].contains("stdin"));
+    let ids: HashSet<&str> = source_lines
+        .iter()
+        .map(|l| l.rsplit("/l/").next().unwrap().trim())
+        .collect();
+    assert_eq!(ids.len(), 3);
+    assert!(ids.iter().all(|id| id.len() == 8));
+}
+
 // ---- cli spec: exposure warning --------------------------------------------------
 
 #[test]
@@ -348,13 +417,13 @@ fn nonexistent_path_still_starts_and_names_the_error() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn max_lines_note_printed_in_file_mode_but_not_by_default() {
+fn max_lines_note_printed_without_stdin_but_not_by_default() {
     let (mut child, _port) = spawn_with_retry(Duration::from_secs(5), |p| {
         spawn_pty_file_mode(p, &["--max-lines", "5"])
     });
     let (stdout, _) = read_all_nonblocking(&mut child, Duration::from_millis(100));
     assert!(
-        stdout.contains("--max-lines has no effect in file mode"),
+        stdout.contains("--max-lines has no effect without stdin"),
         "expected the no-op note:\n{stdout}"
     );
 
@@ -759,13 +828,306 @@ fn upload_without_token_or_from_another_origin_is_forbidden() {
     let _ = child.wait();
 }
 
-#[test]
-fn upload_is_refused_in_stdin_mode() {
+/// `file-ingest`, "Upload next to stdin": an upload becomes its own source.
+#[tokio::test]
+async fn an_upload_next_to_stdin_becomes_its_own_source() {
+    use ws_client::{connect_source, connect_ws, list_sources};
+
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    let mut stdin_tab = connect_ws(port).await;
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "from stdin").unwrap();
+    stdin.flush().unwrap();
+    stdin_tab.wait_for_total(1, Duration::from_secs(5)).await;
+
+    let token = ws_client::fetch_token(port);
+    let body = b"{\"level\":\"WARN\",\"msg\":\"uploaded one\"}\n{\"level\":\"WARN\",\"msg\":\"uploaded two\"}\n";
+    let (status, response) = post_upload(port, &same_origin_headers(port, &token), body);
+    assert_eq!(status, 201, "{response}");
+    let id = serde_json::from_str::<serde_json::Value>(&response).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(id.len(), 8);
+
+    let mut upload_tab = connect_source(port, &id).await;
+    upload_tab.wait_for_total(2, Duration::from_secs(5)).await;
+    let window = upload_tab
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+        .await;
+    assert_eq!(messages(&window), vec!["uploaded one", "uploaded two"]);
+    let stats = upload_tab
+        .request(serde_json::json!({"type": "stats"}))
+        .await;
+    assert_eq!(stats["data"]["source"]["name"], "second.jsonl");
+    assert_eq!(stats["data"]["source"]["kind"], "upload");
+
+    let window = stdin_tab
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+        .await;
+    assert_eq!(messages(&window), vec!["from stdin"]);
+    let kinds: Vec<_> = list_sources(port)
+        .await
+        .iter()
+        .map(|s| s["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(kinds, ["stdin", "upload"]);
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `file-ingest`, "Aborted upload leaves nothing behind".
+#[tokio::test]
+async fn an_aborted_upload_leaves_no_source() {
     let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
     let token = ws_client::fetch_token(port);
-    let (status, body) = post_upload(port, &same_origin_headers(port, &token), b"x\n");
-    assert_eq!(status, 409);
-    assert!(body.contains("stdin stream"), "{body}");
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let mut request = "POST /upload HTTP/1.1\r\nContent-Type: application/octet-stream\r\nContent-Length: 1000000\r\n".to_string();
+    for (name, value) in same_origin_headers(port, &token) {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str("\r\n");
+    stream.write_all(request.as_bytes()).unwrap();
+    for i in 0..200 {
+        writeln!(stream, "{{\"msg\":\"partial {i}\"}}").unwrap();
+    }
+    stream.flush().unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let during = ws_client::list_sources(port).await;
+    assert_eq!(
+        during.len(),
+        2,
+        "the upload is listed while it arrives: {during:?}"
+    );
+    drop(stream);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let sources = ws_client::list_sources(port).await;
+        if sources.len() == 1 {
+            assert_eq!(sources[0]["kind"], "stdin");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "partial upload still listed: {sources:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Writes `contents` to a file unique to this test process and returns its path.
+fn temp_log(name: &str, contents: &str) -> String {
+    let path = std::env::temp_dir().join(format!("looqlog-test-{}-{name}", std::process::id()));
+    std::fs::write(&path, contents).unwrap();
+    path.display().to_string()
+}
+
+/// Source ids by name suffix, from the landing list.
+async fn source_id(port: u16, name_suffix: &str) -> String {
+    ws_client::list_sources(port)
+        .await
+        .iter()
+        .find(|s| s["name"].as_str().unwrap().ends_with(name_suffix))
+        .unwrap_or_else(|| panic!("no source named *{name_suffix}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// `query-api`, "Two tabs, two sources" and "Override does not leak to another source".
+#[tokio::test]
+async fn two_sources_keep_their_own_entries_and_format() {
+    use ws_client::connect_source;
+
+    let a = temp_log("two-a.log", "level=info msg=alpha\nlevel=warn msg=beta\n");
+    let b = temp_log("two-b.log", "plain gamma line\n");
+    let (mut child, port) =
+        spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[&a, &b]));
+    drop(child.stdin.take());
+    let (id_a, id_b) = (
+        source_id(port, "two-a.log").await,
+        source_id(port, "two-b.log").await,
+    );
+    assert_ne!(id_a, id_b);
+    let mut tab_a = connect_source(port, &id_a).await;
+    let mut tab_b = connect_source(port, &id_b).await;
+    tab_a.wait_for_total(2, Duration::from_secs(5)).await;
+    tab_b.wait_for_total(1, Duration::from_secs(5)).await;
+    let wa = tab_a
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+        .await;
+    let wb = tab_b
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+        .await;
+    assert_eq!(messages(&wa), vec!["alpha", "beta"]);
+    assert_eq!(messages(&wb), vec!["plain gamma line"]);
+
+    let mut tab_a2 = connect_source(port, &id_a).await;
+    tab_a2.wait_for_total(2, Duration::from_secs(5)).await;
+    tab_a
+        .request(serde_json::json!({"type": "set_format", "format": "plain"}))
+        .await;
+    assert!(tab_a2
+        .wait_for(Duration::from_secs(3), |m| m["type"] == "reset")
+        .await
+        .is_some());
+    assert!(
+        tab_b
+            .wait_for(Duration::from_millis(600), |m| m["type"] == "reset")
+            .await
+            .is_none(),
+        "the other source's tab was reset"
+    );
+    let stats = tab_b.request(serde_json::json!({"type": "stats"})).await;
+    assert_eq!(stats["data"]["stats"]["format"], "plain");
+    let stats = tab_a2.request(serde_json::json!({"type": "stats"})).await;
+    assert_eq!(stats["data"]["stats"]["format"], "plain");
+    assert!(
+        stats["data"]["stats"]["detection"].is_null()
+            || stats["data"]["stats"]["detection"]["format"] != "logfmt"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `query-api`, "Stale link after restart" and `local-server`, "Unknown id still loads
+/// the page".
+#[tokio::test]
+async fn an_unknown_id_gets_the_page_and_closed_unknown() {
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    assert_eq!(http_get_status(port, "/l/zzzzzzzz"), Some(200));
+    let mut tab = ws_client::connect_source(port, "zzzzzzzz").await;
+    let first = tab
+        .recv(Duration::from_secs(3))
+        .await
+        .expect("a first message");
+    assert_eq!(
+        first,
+        serde_json::json!({"type": "closed", "reason": "unknown"})
+    );
+    let reply = tab
+        .request_raw(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+        .await;
+    assert_eq!(reply["type"], "error", "{reply}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `source-registry`, "Closing from the landing", and stdin cannot be closed.
+#[tokio::test]
+async fn closing_from_the_landing_tells_the_tabs() {
+    use ws_client::{connect_landing, connect_source};
+
+    let a = temp_log("close-a.log", "level=info msg=alpha\n");
+    let (mut child, port) =
+        spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[&a]));
+    let id = source_id(port, "close-a.log").await;
+    let stdin_id = source_id(port, "stdin").await;
+    let mut tab = connect_source(port, &id).await;
+    tab.wait_for_total(1, Duration::from_secs(5)).await;
+
+    let mut landing = connect_landing(port).await;
+    let listed = landing
+        .wait_for(Duration::from_secs(3), |m| {
+            m["type"] == "sources"
+                && m["sources"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|s| s["id"] == id.as_str() && s["tabs"] == 1)
+        })
+        .await;
+    assert!(listed.is_some(), "the landing shows the tab count");
+    let refused = landing
+        .request_raw(serde_json::json!({"type": "close", "source": stdin_id}))
+        .await;
+    assert_eq!(refused["type"], "error");
+    assert!(refused["message"].as_str().unwrap().contains("stdin"));
+    landing
+        .request(serde_json::json!({"type": "close", "source": id}))
+        .await;
+
+    let closed = tab
+        .wait_for(Duration::from_secs(3), |m| m["type"] == "closed")
+        .await;
+    assert_eq!(
+        closed,
+        Some(serde_json::json!({"type": "closed", "reason": "closed"}))
+    );
+    let gone = landing
+        .wait_for(Duration::from_secs(3), |m| {
+            m["type"] == "sources" && m["sources"].as_array().unwrap().len() == 1
+        })
+        .await;
+    assert!(gone.is_some(), "the closed source left the list");
+    let mut reloaded = connect_source(port, &id).await;
+    assert_eq!(
+        reloaded.recv(Duration::from_secs(3)).await,
+        Some(serde_json::json!({"type": "closed", "reason": "closed"}))
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn post_close(port: u16, id: &str, headers: &[(&str, String)]) -> u16 {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut request =
+        format!("POST /sources/{id}/close HTTP/1.1\r\nConnection: close\r\nContent-Length: 0\r\n");
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str("\r\n");
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok();
+    response
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0)
+}
+
+/// `security`, "Cross-site close"; stdin close refused with 409.
+#[tokio::test]
+async fn close_over_http_is_checked_and_refuses_stdin() {
+    let a = temp_log("http-close.log", "level=info msg=alpha\n");
+    let (mut child, port) =
+        spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[&a]));
+    let token = ws_client::fetch_token(port);
+    let id = source_id(port, "http-close.log").await;
+    let stdin_id = source_id(port, "stdin").await;
+
+    let mut foreign = same_origin_headers(port, &token);
+    foreign[1] = ("Origin", "http://evil.example".to_string());
+    assert_eq!(post_close(port, &id, &foreign), 403);
+    let mut no_token = same_origin_headers(port, &token);
+    no_token.retain(|(n, _)| *n != "X-Looqlog-Token");
+    assert_eq!(post_close(port, &id, &no_token), 403);
+    assert_eq!(ws_client::list_sources(port).await.len(), 2, "still open");
+
+    assert_eq!(
+        post_close(port, &stdin_id, &same_origin_headers(port, &token)),
+        409
+    );
+    assert_eq!(
+        post_close(port, &id, &same_origin_headers(port, &token)),
+        204
+    );
+    assert_eq!(
+        post_close(port, &id, &same_origin_headers(port, &token)),
+        404
+    );
 
     let _ = child.kill();
     let _ = child.wait();
@@ -799,43 +1161,6 @@ async fn the_argv_file_is_queryable_without_a_picker() {
         .unwrap()
         .ends_with("sample.jsonl"));
     assert_eq!(stats["data"]["stats"]["format"], "json");
-
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// `file-ingest`, "Upload from the browser": a successful upload replaces the source
-/// and every connection is told to re-query.
-#[cfg(target_os = "macos")]
-#[tokio::test]
-async fn an_upload_replaces_the_source_and_resets_clients() {
-    use ws_client::connect_ws;
-
-    let path = fixture_path();
-    let (mut child, port) =
-        spawn_with_retry(Duration::from_secs(5), |p| spawn_pty_file_mode(p, &[&path]));
-    let mut client = connect_ws(port).await;
-    client.wait_for_total(20, Duration::from_secs(5)).await;
-
-    let token = ws_client::fetch_token(port);
-    let body = b"{\"level\":\"WARN\",\"msg\":\"uploaded one\"}\n{\"level\":\"WARN\",\"msg\":\"uploaded two\"}\n";
-    let (status, response) = post_upload(port, &same_origin_headers(port, &token), body);
-    assert_eq!(status, 200, "{response}");
-
-    assert!(client
-        .wait_for(Duration::from_secs(3), |m| m["type"] == "reset")
-        .await
-        .is_some());
-    let window = client
-        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
-        .await;
-    assert_eq!(messages(&window), vec!["uploaded one", "uploaded two"]);
-    let stats = client.request(serde_json::json!({"type": "stats"})).await;
-    assert_eq!(stats["data"]["source"]["name"], "second.jsonl");
-    assert!(!stats["data"]["stats"]["fieldInventory"]["fields"]
-        .as_object()
-        .unwrap()
-        .contains_key("service"));
 
     let _ = child.kill();
     let _ = child.wait();
@@ -1234,12 +1559,38 @@ mod ws_client {
         body[start..end].to_string()
     }
 
+    /// A tab on the process's only source.
     pub async fn connect_ws(port: u16) -> WsClient {
+        let sources = list_sources(port).await;
+        assert_eq!(sources.len(), 1, "expected exactly one source: {sources:?}");
+        connect_source(port, sources[0]["id"].as_str().unwrap()).await
+    }
+
+    /// The landing's source list, as its first `sources` message carries it.
+    pub async fn list_sources(port: u16) -> Vec<Value> {
+        let mut landing = connect_landing(port).await;
+        let msg = landing
+            .wait_for(Duration::from_secs(5), |m| m["type"] == "sources")
+            .await
+            .expect("a sources message on the landing connection");
+        msg["sources"].as_array().unwrap().clone()
+    }
+
+    pub async fn connect_landing(port: u16) -> WsClient {
+        connect_as(port, Value::Null).await
+    }
+
+    pub async fn connect_source(port: u16, id: &str) -> WsClient {
+        connect_as(port, id.into()).await
+    }
+
+    async fn connect_as(port: u16, source: Value) -> WsClient {
         let token = fetch_token(port);
         let (mut inner, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws"))
             .await
             .expect("connect to /ws");
-        let auth = serde_json::json!({"type": "auth", "token": token}).to_string();
+        let auth =
+            serde_json::json!({"type": "auth", "token": token, "source": source}).to_string();
         inner
             .send(Message::Text(auth.into()))
             .await
@@ -1307,7 +1658,14 @@ mod ws_client {
         }
 
         /// Sends `body` with a fresh id and returns its reply, panicking on an error reply.
-        pub async fn request(&mut self, mut body: Value) -> Value {
+        pub async fn request(&mut self, body: Value) -> Value {
+            let msg = self.request_raw(body).await;
+            assert_eq!(msg["type"], "reply", "error reply: {msg}");
+            msg
+        }
+
+        /// Sends `body` with a fresh id and returns its reply or error.
+        pub async fn request_raw(&mut self, mut body: Value) -> Value {
             let id = self.next_id;
             self.next_id += 1;
             body["id"] = id.into();
@@ -1321,7 +1679,6 @@ mod ws_client {
                     .await
                     .expect("connection closed before the reply");
                 if msg["id"] == id {
-                    assert_eq!(msg["type"], "reply", "error reply: {msg}");
                     return msg;
                 }
                 self.pending.push_back(msg);

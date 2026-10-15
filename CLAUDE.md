@@ -1,6 +1,6 @@
 # looqlog
 
-Single-binary Rust CLI that opens a local web UI for a log file or a live stdin
+Single-binary Rust CLI that opens a local web UI for log files and a live stdin
 stream. Parsing, indexing and search run natively in the local `looqlog` process; the
 browser is a thin client — privacy first (nothing leaves the machine), zero config, no
 runtime dependencies.
@@ -22,16 +22,19 @@ worse than none, because it documents behavior the tool no longer has.
 
 ```
 CLI (axum + tokio, 127.0.0.1:PORT)
-  ├── HTTP: serves index.html + TS bundle + stylesheet (include_bytes!, embedded)
-  ├── POST /upload: picked/dropped file streamed into the session (token + Origin/Host)
-  ├── reads the argv file at startup; stdin parsed as it arrives, ring buffer (ADR-0004)
-  ├── Session (looqlog-core, target-agnostic, ADR-0005): detect, parse, index,
-  │   filter, search, timeline buckets (ADR-0010)
-  └── WebSocket /ws: token handshake → queries/windows/buckets + coalesced notifications
+  ├── HTTP: serves index.html + TS bundle + stylesheet at / and /l/<id> (embedded)
+  ├── POST /upload: picked/dropped file streamed into a new source (token + Origin/Host)
+  ├── Registry of sources (ADR-0011): argv files and stdin owned by the process,
+  │   uploads owned by tabs (10-min GC), one 4 GiB retained-bytes budget
+  ├── each source is a Session (looqlog-core, target-agnostic, ADR-0005): detect,
+  │   parse, index, filter, search, timeline buckets (ADR-0010); stdin ring buffer (ADR-0004)
+  └── WebSocket /ws: token + source handshake → queries/windows/buckets + coalesced
+      notifications; no source = the landing's live source list
         ↓
 Browser (TypeScript, thin client)
-  └── UI: timeline (uPlot), virtual-scrolled table, filters, search — renders only the
-      rows on screen, pulled from the backend
+  ├── / : landing — source list, upload
+  └── /l/<id>: timeline (uPlot), virtual-scrolled table, filters, search for one
+      source — renders only the rows on screen, pulled from the backend
 ```
 
 Key constraints, each with an ADR:
@@ -44,6 +47,7 @@ Key constraints, each with an ADR:
 - The argv path was a hint, not an auto-loaded file; superseded by ADR-0010 — [ADR-0007](docs/adr/0007-argv-path-is-a-hint-not-an-auto-loaded-file.md)
 - The project, binary and every crate are named `looqlog` — [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)
 - Parse on the backend; the browser is a thin client — [ADR-0010](docs/adr/0010-parse-on-the-backend-thin-client.md)
+- Sources are owned by the process (argv, stdin) or by tabs (uploads), under one memory budget — [ADR-0011](docs/adr/0011-sources-owned-by-process-or-tabs.md)
 
 **Privacy guarantee to keep straight:** every mode — argv file, uploaded file, stdin — is
 read by the local `looqlog` process and reaches the browser over a localhost WebSocket in

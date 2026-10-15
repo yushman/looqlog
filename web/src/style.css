@@ -176,6 +176,57 @@ looqlog-workspace {
   min-height: 0;
 }
 
+/* The landing at `/` (`source-registry` spec): a plain scrolling page, not a workspace. */
+looqlog-landing {
+  display: block;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.landing {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.landing h2 {
+  font-size: 1em;
+  margin: 1rem 0 0.5rem;
+}
+
+.landing-sources {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.landing-sources th,
+.landing-sources td {
+  text-align: left;
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.landing-sources th {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.landing-sources a {
+  color: var(--accent);
+  word-break: break-all;
+}
+
+.landing-error {
+  color: var(--error);
+  font-size: 0.85em;
+}
+
+.gone-note {
+  color: var(--warn);
+  font-weight: bold;
+}
+
 /* Collapse is a change to the grid template, never `display: none` on the pane
    (collapsible-workspace-panes design D2): a collapsed pane keeps its box, so a
    toggle does not destroy and rebuild it. The two widths are custom properties so

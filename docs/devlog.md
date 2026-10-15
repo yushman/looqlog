@@ -3394,6 +3394,64 @@ them and no notification carries them), and an optional `anchor` ordinal on `win
 front is evicted. The timeline's bucket grid now includes the entry exactly at the end of
 the span — the TS version it was ported from silently dropped it.
 
+## 2026-10-15 (second entry) — `multi-source-tabs`: a registry instead of one slot
+
+**`retained_bytes` calibration.** `Session::retained_bytes()` is an estimate kept
+incrementally (no scan per call, since the budget is checked per ingest chunk): raw line bytes
++ 16 per retained line + per entry `112 + message.len()`, + 640 for a non-empty field map (one
+B-tree leaf node), + `16 + key.len() + value.len()` per field. Fitted against the live heap
+from `cargo run -p looqlog-core --release --example mem_probe -- session 64`, which now prints
+both:
+
+| format | entries | live heap | `retained_bytes()` | ratio |
+|---|---|---|---|---|
+| JSON Lines | 523,614 | 493,004,107 | 523,653,585 | 1.06 |
+| logfmt | 703,921 | 687,275,800 | 680,821,345 | 0.99 |
+| plain text | 995,990 | 232,434,006 | 233,835,430 | 1.01 |
+
+The fixed per-entry cost came from plain text (no fields): (heap − raw − messages) / entries
+≈ 127 bytes, close to `size_of::<Entry>()` plus its `(i64, usize)` timestamp ref and the raw
+line's box. JSON and logfmt carry the same three fields and differ by ~67 bytes per entry, which
+is string capacity slack in the logfmt parser rather than anything the field count explains, so
+the field-map constant was set from the B-tree leaf size (11 × (24 + 32) + header ≈ 630) and
+the remaining slack split per field. Within ±6% on all three, so the 4 GiB budget is a guard on
+real heap, not on input size.
+
+**What changed.** `crates/looqlog/src/source.rs` became a `Registry`: ids are 8 base32
+characters from `OsRng`, never reused (removed ids stay in a `gone` map so a reload of a
+closed tab says "closed", not "unknown"); each entry carries its kind, retained bytes, tab
+count and `orphaned_since`. Lock order is registry → source everywhere — readers drop the
+source lock before charging the budget — so the landing's row snapshot (registry, then each
+source) cannot deadlock against ingest. An upload's partial source is removed by a drop
+guard, which also covers the client hanging up mid-body: axum drops the handler future
+without ever yielding a body error, and a source that never finished would otherwise sit
+in the registry with no `orphaned_since` and never be swept. Budget eviction picks the
+upload that has been tabless longest (by `orphaned_since`); an upload still arriving has
+none and is never a candidate. A budget refusal answers `507`.
+
+The page routes on the path. The server still fills `__LOOQLOG_MODE__`, now per request:
+`/l/<id>` of the stdin source gets the live-tail UI, every other id the file UI, and an
+unknown id the file UI whose socket immediately says `closed{unknown}`. A `reset` no longer
+means "another file replaced this one" — sources are never replaced — so the shell keeps its
+view on every reset and only re-queries.
+
+**Manual run (Playwright, Chromium).** `(cat stdin.txt; sleep 1800) | looqlog
+tests/fixtures/sample.jsonl b.log`: the banner listed the landing and three source URLs;
+`/` listed three rows (file/loaded, file/loaded, stdin/live, no close on stdin); each
+`/l/<id>` showed only its own entries (20, 2, and the 2 stdin lines in the live-tail UI);
+reloading the stdin tab kept it; a new tab at `/` showed the landing; uploading
+`up.jsonl` from the landing navigated to `/l/<new id>` with its 2 entries; closing `b.log`
+from another landing tab switched the `b.log` tab to "This source was closed." with the
+upload target and no table, and that landing's list dropped the row; `/l/zzzzzzzz` showed
+the unknown-source message. With the first process on 7891, a second `looqlog` printed
+"port 7891 is busy (another looqlog?), using the next free one" and served on 7892.
+
+**A flaky observation, not fixed.** Twice, the first `cargo test -p looqlog --test cli`
+right after an edit failed the three `script(1)`-based tests ("never came up within 5s"
+three times each), and every rerun passed; touching sources to force rebuilds did not
+reproduce it again. HEAD showed no failure in the one comparison run. The cause was not
+found.
+
 ## Ideas for later
 
 - The field inventory is noisy on logcat in a way this change deliberately left alone.

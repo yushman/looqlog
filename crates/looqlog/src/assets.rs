@@ -11,8 +11,9 @@ pub const APP_JS: &[u8] = include_bytes!("../assets/assets/index.js");
 pub const APP_CSS: &[u8] = include_bytes!("../assets/assets/index.css");
 
 /// Fill in the `__LOOQLOG_MODE__` and `__LOOQLOG_TOKEN__` placeholders in the vendored
-/// `index.html`. `mode_json` is a small trusted JSON object built in `main.rs` from typed
-/// values (`{"mode":"file"}` or `{"mode":"stdin","maxLines":N}`); `token` is the
+/// `index.html`. `mode_json` is a small trusted JSON object built in `server.rs` from typed
+/// values (`{"mode":"landing"}`, `{"mode":"file"}` or `{"mode":"stdin","maxLines":N}`);
+/// `token` is the
 /// per-process random hex string (`security` spec), read by `web/src/token.ts` and
 /// presented as the first `/ws` message.
 pub fn render_index(mode_json: &str, token: &str) -> String {

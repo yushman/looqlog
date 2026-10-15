@@ -1,5 +1,6 @@
 // The one `/ws` connection a tab holds (`query-api` spec, ADR-0010): authenticates with
-// the per-process token as its first frame, sends requests tagged with ids, resolves
+// the per-process token and its source (none for the landing) as its first frame, sends
+// requests tagged with ids, resolves
 // each with its reply, hands notifications to the shell, and reconnects with capped
 // exponential backoff. No DOM, so it is unit-testable with a fake socket.
 
@@ -27,6 +28,8 @@ export class ConnectionLostError extends Error {
 export interface QueryClientOptions {
   url: string;
   token: string;
+  /** The source this tab is bound to; `null` for the landing. */
+  source: string | null;
   onState: (state: ConnectionState) => void;
   onNotification: (notification: Notification) => void;
   /** Called after every (re)authentication — the shell re-issues its current query
@@ -101,19 +104,30 @@ export class QueryClient {
     }
     this.socket = socket;
     socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ type: "auth", token: this.opts.token }));
+      socket.send(JSON.stringify({ type: "auth", token: this.opts.token, source: this.opts.source }));
     });
     socket.addEventListener("message", (event) => {
       if (this.socket !== socket) {
         return;
       }
+      const raw = String(event.data);
+      let msg: ServerMessage;
+      try {
+        msg = JSON.parse(raw) as ServerMessage;
+      } catch {
+        console.error("looqlog: could not parse server message:", raw);
+        return;
+      }
       if (this.state === "connecting") {
-        // The server's first frame after a valid token is a notification with totals.
+        // The server's first frame after a valid token is a notification with totals,
+        // or `closed` when the source is gone — then there is nothing to re-query.
         this.reconnectAttempt = 0;
         this.setState(this.ended ? "ended" : "live");
-        this.opts.onConnected();
+        if (msg.type !== "closed") {
+          this.opts.onConnected();
+        }
       }
-      this.handle(String(event.data));
+      this.handle(msg);
     });
     socket.addEventListener("close", () => {
       if (this.socket !== socket) {
@@ -131,14 +145,7 @@ export class QueryClient {
     socket.addEventListener("error", () => undefined);
   }
 
-  private handle(raw: string): void {
-    let msg: ServerMessage;
-    try {
-      msg = JSON.parse(raw) as ServerMessage;
-    } catch {
-      console.error("looqlog: could not parse server message:", raw);
-      return;
-    }
+  private handle(msg: ServerMessage): void {
     switch (msg.type) {
       case "reply": {
         const p = this.pending.get(msg.id);

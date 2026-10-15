@@ -136,9 +136,4 @@ export class ViewSession {
   applyGrown(total: number, matched: number, rowCount: number): void {
     this.counts = { ...this.counts, total, matched, rowCount };
   }
-
-  /** A new source: its ordinals mean nothing to the old toggles. */
-  forgetToggles(): void {
-    this.toggled.clear();
-  }
 }

@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
-use crate::entry::Entry;
+use crate::entry::{Entry, FieldValue};
 use crate::level::Level;
 
 /// Evicted refs are left in `sorted` and filtered lazily; the vector is compacted once
@@ -24,6 +24,35 @@ use crate::level::Level;
 /// of evictions does not compact on every call.
 const COMPACT_MIN_DEAD: usize = 1024;
 const COMPACT_RATIO: f64 = 0.25;
+
+/// Calibrated against `mem_probe -- session` (docs/devlog.md): the fixed cost of one
+/// retained entry (the `Entry` itself, its index refs, allocator slack) and of a non-empty
+/// field map (its first B-tree node).
+const ENTRY_BYTES: usize = 112;
+const FIELD_MAP_BYTES: usize = 640;
+const FIELD_BYTES: usize = 16;
+
+/// Estimated heap retained by one entry.
+fn entry_bytes(entry: &Entry) -> usize {
+    let fields: usize = entry
+        .fields
+        .iter()
+        .map(|(key, value)| {
+            FIELD_BYTES
+                + key.len()
+                + match value {
+                    FieldValue::String(s) | FieldValue::Number(s) | FieldValue::Json(s) => s.len(),
+                    FieldValue::Bool(_) | FieldValue::Null => 0,
+                }
+        })
+        .sum();
+    let map = if entry.fields.is_empty() {
+        0
+    } else {
+        FIELD_MAP_BYTES
+    };
+    ENTRY_BYTES + entry.message.len() + map + fields
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RobustSpan {
@@ -45,6 +74,8 @@ pub struct EntryIndex {
     /// has been evicted keeps its `continuation_of`, and is treated as standalone.
     chain_members: HashMap<usize, Vec<usize>>,
     level_counts: BTreeMap<Level, usize>,
+    /// Sum of [`entry_bytes`] over retained entries.
+    bytes: usize,
 }
 
 /// First index in `sorted` whose timestamp is `>= ms`.
@@ -93,6 +124,7 @@ impl EntryIndex {
             }
             None => self.timestampless += 1,
         }
+        self.bytes += entry_bytes(&entry);
         self.entries.push_back(entry);
     }
 
@@ -124,6 +156,7 @@ impl EntryIndex {
             } else {
                 self.timestampless -= 1;
             }
+            self.bytes -= entry_bytes(&entry);
             evicted.push(entry.ordinal);
         }
         let dead = self.sorted.len() - self.timestamped_live;
@@ -164,6 +197,11 @@ impl EntryIndex {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Estimated heap retained by the entries.
+    pub fn retained_bytes(&self) -> usize {
+        self.bytes
     }
 
     pub fn timestampless_count(&self) -> usize {

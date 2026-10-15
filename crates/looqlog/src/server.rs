@@ -1,12 +1,12 @@
 //! HTTP + WebSocket server (`local-server`, `query-api`, `security` specs, ADR-0010).
 
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
@@ -19,7 +19,7 @@ use looqlog_core::View;
 
 use crate::assets::{render_index, APP_CSS, APP_JS};
 use crate::protocol::{ClientMessage, ServerMessage};
-use crate::source::{self, lock, Shared};
+use crate::source::{self, lock, CloseError, CloseReason, Kind, Registry, Shared, Source};
 
 /// How long a freshly upgraded `/ws` connection has to present the token before it is
 /// closed without any log data being sent.
@@ -32,19 +32,27 @@ pub const TOKEN_HEADER: &str = "x-looqlog-token";
 pub const FILENAME_HEADER: &str = "x-looqlog-filename";
 
 pub struct AppState {
-    /// Pre-rendered JSON for the `__LOOQLOG_MODE__` placeholder.
-    pub mode_json: String,
-    /// Per-process random token, embedded in the page and required by `/ws` and
-    /// `/upload`. Never placed in a URL.
+    /// Per-process random token, embedded in the page and required by `/ws`, `/upload`
+    /// and close. Never placed in a URL.
     pub token: String,
-    pub source: Shared,
+    pub registry: Arc<Mutex<Registry>>,
+    /// `--max-lines`, for a stdin source's page.
+    pub max_lines: usize,
     /// The address the listener is bound to, for the `Host` check.
     pub bound: SocketAddr,
 }
 
+impl AppState {
+    pub fn registry(&self) -> MutexGuard<'_, Registry> {
+        self.registry.lock().expect("registry lock poisoned")
+    }
+}
+
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/", get(index_handler))
+        .route("/", get(landing_handler))
+        .route("/l/{id}", get(source_page_handler))
+        .route("/sources/{id}/close", post(close_handler))
         .route("/assets/index.js", get(app_js_handler))
         .route("/assets/index.css", get(app_css_handler))
         .route("/ws", get(ws_handler))
@@ -68,8 +76,26 @@ async fn add_security_headers(request: Request, next: Next) -> Response {
     response
 }
 
-async fn index_handler(State(state): State<Arc<AppState>>) -> Html<String> {
-    Html(render_index(&state.mode_json, &state.token))
+async fn landing_handler(State(state): State<Arc<AppState>>) -> Html<String> {
+    Html(render_index(r#"{"mode":"landing"}"#, &state.token))
+}
+
+/// Served for any id, known or not (`local-server` spec): the page itself renders a
+/// closed or unknown source from what `/ws` says.
+async fn source_page_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Html<String> {
+    let stdin = state
+        .registry()
+        .get(&id)
+        .is_some_and(|shared| lock(&shared).kind == Kind::Stdin);
+    let mode = if stdin {
+        format!(r#"{{"mode":"stdin","maxLines":{}}}"#, state.max_lines)
+    } else {
+        r#"{"mode":"file"}"#.to_string()
+    };
+    Html(render_index(&mode, &state.token))
 }
 
 async fn app_js_handler() -> impl IntoResponse {
@@ -142,14 +168,8 @@ fn upload_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": message.into() }))).into_response()
 }
 
-/// `POST /upload` (`file-ingest` spec, design.md D4): checked before a byte of the body
-/// is read, then streamed into a fresh session that replaces the current source once
-/// the first chunk has arrived. A failure before that leaves the previous source intact.
-async fn upload_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Body,
-) -> Response {
+/// Token, `Origin` and `Host` checks shared by `/upload` and close (`security` spec).
+fn post_allowed(state: &AppState, headers: &HeaderMap) -> bool {
     let host = headers.get(header::HOST);
     let token_ok = headers
         .get(TOKEN_HEADER)
@@ -158,15 +178,36 @@ async fn upload_handler(
     let origin_ok = headers
         .get(header::ORIGIN)
         .is_some_and(|o| origin_matches_host(o, host));
-    if !token_ok || !origin_ok || !host_allowed(host, state.bound) {
+    token_ok && origin_ok && host_allowed(host, state.bound)
+}
+
+/// Drops an upload's partial source unless it completed — including when the client
+/// goes away and the handler is dropped mid-body (`file-ingest` spec).
+struct PartialUpload {
+    state: Arc<AppState>,
+    id: String,
+    reason: Option<CloseReason>,
+}
+
+impl Drop for PartialUpload {
+    fn drop(&mut self) {
+        if let Some(reason) = self.reason {
+            self.state.registry().remove(&self.id, reason);
+        }
+    }
+}
+
+/// `POST /upload` (`file-ingest` spec, design.md D4): checked before a byte of the body
+/// is read, then streamed into a new source. Any failure drops that source and leaves
+/// every other one as it was.
+async fn upload_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    if !post_allowed(&state, &headers) {
         tracing::warn!("rejected /upload: token, Origin or Host check failed");
         return upload_error(StatusCode::FORBIDDEN, "forbidden");
-    }
-    if lock(&state.source).stdin {
-        return upload_error(
-            StatusCode::CONFLICT,
-            "this looqlog process is showing a stdin stream; it does not accept file uploads",
-        );
     }
     let name = headers
         .get(FILENAME_HEADER)
@@ -195,50 +236,85 @@ async fn upload_handler(
         }
         Some(Ok(chunk)) => chunk,
     };
-    let my_id = {
-        let mut src = lock(&state.source);
-        let id = src.replace(Some(name.clone()), declared);
-        src.session.ingest(&first);
-        id
+    let mut new_source = Source::new(Kind::Upload, name.clone(), None);
+    new_source.total_bytes = declared;
+    new_source.warning = declared.and_then(source::size_warning);
+    let (id, shared) = state.registry().add(new_source);
+    let mut partial = PartialUpload {
+        state: state.clone(),
+        id: id.clone(),
+        reason: Some(CloseReason::Closed),
     };
-    let mut received = first.len() as u64;
-    while let Some(chunk) = stream.next().await {
-        let mut src = lock(&state.source);
-        if src.id != my_id {
+    let mut received = 0u64;
+    let mut next = Some(Ok(first));
+    while let Some(chunk) = next {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(err) => {
+                return upload_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("reading {name} failed: {err}"),
+                )
+            }
+        };
+        received += chunk.len() as u64;
+        if received > source::CAP_BYTES {
             return upload_error(
-                StatusCode::CONFLICT,
-                format!("{name} was replaced by another file"),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                source::cap_error(&name, received),
             );
         }
-        match chunk {
-            Ok(chunk) => {
-                received += chunk.len() as u64;
-                if received > source::CAP_BYTES {
-                    let message = source::cap_error(&name, received);
-                    src.error = Some(message.clone());
-                    src.session.finish();
-                    return upload_error(StatusCode::PAYLOAD_TOO_LARGE, message);
-                }
-                src.session.ingest(&chunk);
+        let retained = {
+            let mut src = lock(&shared);
+            if src.closed.is_some() {
+                return upload_error(StatusCode::CONFLICT, format!("{name} was closed"));
             }
-            Err(err) => {
-                let message = format!("reading {name} failed: {err}");
-                src.error = Some(message.clone());
-                src.session.finish();
-                return upload_error(StatusCode::BAD_REQUEST, message);
-            }
+            src.session.ingest(&chunk);
+            src.session.retained_bytes()
+        };
+        if let Err(message) = state.registry().charge(&id, retained) {
+            partial.reason = Some(CloseReason::Budget);
+            return upload_error(StatusCode::INSUFFICIENT_STORAGE, message);
         }
+        next = stream.next().await;
     }
-    let mut src = lock(&state.source);
-    if src.id != my_id {
-        return upload_error(
-            StatusCode::CONFLICT,
-            format!("{name} was replaced by another file"),
-        );
+    let retained = {
+        let mut src = lock(&shared);
+        src.total_bytes = Some(received);
+        src.session.finish();
+        src.session.retained_bytes()
+    };
+    let charged = {
+        let mut registry = state.registry();
+        let charged = registry.charge(&id, retained);
+        if charged.is_ok() {
+            registry.upload_done(&id, Instant::now());
+        }
+        charged
+    };
+    if let Err(message) = charged {
+        partial.reason = Some(CloseReason::Budget);
+        return upload_error(StatusCode::INSUFFICIENT_STORAGE, message);
     }
-    src.total_bytes = Some(received);
-    src.session.finish();
-    Json(serde_json::json!({ "entries": src.session.total() })).into_response()
+    partial.reason = None;
+    (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
+}
+
+/// `POST /sources/{id}/close`: the same checks as `/upload`; stdin is refused.
+async fn close_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !post_allowed(&state, &headers) {
+        tracing::warn!("rejected close: token, Origin or Host check failed");
+        return upload_error(StatusCode::FORBIDDEN, "forbidden");
+    }
+    match state.registry().close(&id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(err @ CloseError::Stdin) => upload_error(StatusCode::CONFLICT, err.message()),
+        Err(err @ CloseError::Unknown) => upload_error(StatusCode::NOT_FOUND, err.message()),
+    }
 }
 
 /// Decodes `%XX` escapes (the page sends the name through `encodeURIComponent`).
@@ -262,32 +338,35 @@ fn percent_decode(input: &str) -> String {
 }
 
 /// `security` spec, "WebSocket token handshake": the first text frame must be
-/// `{"type":"auth","token":...}` with the per-process token. Anything else — including
-/// a query sent first — fails, and nothing is ever sent on that socket.
-async fn authenticate(socket: &mut WebSocket, expected_token: &str) -> bool {
+/// `{"type":"auth","token":...,"source":...}` with the per-process token. Anything else —
+/// including a query sent first — fails, and nothing is ever sent on that socket. On
+/// success, returns the source the connection names (`None` for the landing).
+async fn authenticate(socket: &mut WebSocket, expected_token: &str) -> Option<Option<String>> {
     let result = tokio::time::timeout(AUTH_TIMEOUT, async {
         loop {
             match socket.recv().await {
                 Some(Ok(Message::Text(text))) => {
-                    return matches!(
-                        serde_json::from_str::<ClientMessage>(&text),
-                        Ok(ClientMessage::Auth { token }) if token == expected_token
-                    );
+                    return match serde_json::from_str::<ClientMessage>(&text) {
+                        Ok(ClientMessage::Auth { token, source }) if token == expected_token => {
+                            Some(source)
+                        }
+                        _ => None,
+                    };
                 }
-                Some(Ok(Message::Close(_))) | None => return false,
+                Some(Ok(Message::Close(_))) | None => return None,
                 Some(Ok(_)) => continue,
-                Some(Err(_)) => return false,
+                Some(Err(_)) => return None,
             }
         }
     })
     .await;
-    matches!(result, Ok(true))
+    result.ok().flatten()
 }
 
 /// What this connection was last told, so each tick sends only what changed.
 #[derive(Default)]
 struct Sent {
-    source: Option<(u64, u64)>,
+    epoch: Option<u64>,
     revision: Option<u64>,
     counts: Option<(usize, usize, usize)>,
     evicted: u64,
@@ -295,28 +374,29 @@ struct Sent {
     ended: bool,
 }
 
-/// One connection's query state: its view and the source it was built against.
+/// One connection's query state: its source (`None` once it is gone) and its view.
 struct Conn {
+    source: Option<Shared>,
     view: View,
-    source_id: u64,
     sent: Sent,
 }
 
-impl Conn {
-    fn sync_source(&mut self, src_id: u64) {
-        if self.source_id != src_id {
-            self.view = View::new();
-            self.source_id = src_id;
-        }
+/// Keeps the source's tab count for as long as the connection lives.
+struct Tab {
+    state: Arc<AppState>,
+    id: String,
+}
+
+impl Drop for Tab {
+    fn drop(&mut self) {
+        self.state.registry().detach(&self.id, Instant::now());
     }
 }
 
-/// `/ws` connection loop (`query-api` spec): authenticate, then answer requests and
-/// push notifications coalesced to [`NOTIFY_INTERVAL`] with cumulative values. The first
-/// notifications right after authentication carry the current totals, so a late or
-/// reconnecting client positions itself without a snapshot transfer.
+/// `/ws` connection loop (`query-api` spec): authenticate, then serve either the landing
+/// (the source list) or one source.
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
-    if !authenticate(&mut socket, &state.token).await {
+    let Some(source) = authenticate(&mut socket, &state.token).await else {
         let _ = socket
             .send(Message::Close(Some(CloseFrame {
                 code: 4001,
@@ -324,22 +404,114 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             })))
             .await;
         return;
+    };
+    match source {
+        Some(id) => serve_source(socket, state, id).await,
+        None => serve_landing(socket, state).await,
     }
+}
 
-    let initial_id = lock(&state.source).id;
-    let mut conn = Some(Conn {
-        view: View::new(),
-        source_id: initial_id,
-        sent: Sent::default(),
-    });
+fn no_source_error(id: u64) -> ServerMessage {
+    ServerMessage::Error {
+        id,
+        message: "this connection has no source".into(),
+    }
+}
+
+/// A landing connection: the source list after auth and whenever it changes, and
+/// `close` requests.
+async fn serve_landing(mut socket: WebSocket, state: Arc<AppState>) {
+    let mut sent = None;
     let mut tick = tokio::time::interval(NOTIFY_INTERVAL);
     loop {
         tokio::select! {
             _ = tick.tick() => {
-                let shared = state.source.clone();
+                let registry = state.registry.clone();
+                let Ok(rows) = tokio::task::spawn_blocking(move || {
+                    registry.lock().expect("registry lock poisoned").rows()
+                })
+                .await else {
+                    return;
+                };
+                if sent.as_ref() != Some(&rows) {
+                    let msg = ServerMessage::Sources { sources: rows.clone() };
+                    if send_json(&mut socket, &msg).await.is_err() {
+                        return;
+                    }
+                    sent = Some(rows);
+                }
+            }
+            incoming = socket.recv() => {
+                let Some(request) = next_request(incoming) else {
+                    return;
+                };
+                let Some(request) = request else {
+                    continue;
+                };
+                let Some(id) = request.id() else {
+                    continue;
+                };
+                let reply = match request {
+                    ClientMessage::Close { source, .. } => match state.registry().close(&source) {
+                        Ok(()) => reply(id, serde_json::json!({})),
+                        Err(err) => ServerMessage::Error { id, message: err.message().into() },
+                    },
+                    _ => no_source_error(id),
+                };
+                if send_json(&mut socket, &reply).await.is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// `None`: the connection is over. `Some(None)`: a frame to skip.
+fn next_request(incoming: Option<Result<Message, axum::Error>>) -> Option<Option<ClientMessage>> {
+    let text = match incoming {
+        Some(Ok(Message::Text(text))) => text,
+        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return None,
+        Some(Ok(_)) => return Some(None),
+    };
+    match serde_json::from_str::<ClientMessage>(&text) {
+        Ok(request) => Some(Some(request)),
+        Err(err) => {
+            tracing::warn!("unparsable /ws request: {err}");
+            Some(None)
+        }
+    }
+}
+
+/// A tab's connection to one source: answer requests and push notifications coalesced to
+/// [`NOTIFY_INTERVAL`] with cumulative values. The first notifications right after
+/// authentication carry the current totals, so a late or reconnecting client positions
+/// itself without a snapshot transfer. An unknown or gone source gets `closed` instead.
+async fn serve_source(mut socket: WebSocket, state: Arc<AppState>, source_id: String) {
+    let attached = state.registry().attach(&source_id);
+    let _tab = attached.is_ok().then(|| Tab {
+        state: state.clone(),
+        id: source_id.clone(),
+    });
+    let mut conn = Some(Conn {
+        source: attached.as_ref().ok().cloned(),
+        view: View::new(),
+        sent: Sent::default(),
+    });
+    if let Err(reason) = attached {
+        if send_json(&mut socket, &ServerMessage::Closed { reason })
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
+    let mut tick = tokio::time::interval(NOTIFY_INTERVAL);
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
                 let mut c = conn.take().expect("conn present between steps");
                 let Ok((c, messages)) = tokio::task::spawn_blocking(move || {
-                    let messages = notifications(&shared, &mut c);
+                    let messages = notifications(&mut c);
                     (c, messages)
                 })
                 .await else {
@@ -353,25 +525,28 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 }
             }
             incoming = socket.recv() => {
-                let text = match incoming {
-                    Some(Ok(Message::Text(text))) => text,
-                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
-                    Some(Ok(_)) => continue,
+                let Some(request) = next_request(incoming) else {
+                    return;
                 };
-                let request = match serde_json::from_str::<ClientMessage>(&text) {
-                    Ok(request) => request,
-                    Err(err) => {
-                        tracing::warn!("unparsable /ws request: {err}");
-                        continue;
-                    }
+                let Some(request) = request else {
+                    continue;
                 };
                 let Some(id) = request.id() else {
                     continue; // a second auth frame is harmless
                 };
-                let shared = state.source.clone();
                 let mut c = conn.take().expect("conn present between steps");
+                let registry = state.registry.clone();
+                let source_id = source_id.clone();
                 let Ok((c, reply)) = tokio::task::spawn_blocking(move || {
-                    let reply = dispatch(&shared, &mut c, id, request);
+                    let reformat = matches!(request, ClientMessage::SetFormat { .. });
+                    let reply = dispatch(&mut c, id, request);
+                    if let (true, Some(shared)) = (reformat, &c.source) {
+                        let retained = lock(shared).session.retained_bytes();
+                        registry
+                            .lock()
+                            .expect("registry lock poisoned")
+                            .record(&source_id, retained);
+                    }
                     (c, reply)
                 })
                 .await else {
@@ -393,12 +568,27 @@ fn reply(id: u64, data: impl serde::Serialize) -> ServerMessage {
     }
 }
 
-fn dispatch(shared: &Shared, conn: &mut Conn, id: u64, request: ClientMessage) -> ServerMessage {
-    let mut src = lock(shared);
-    conn.sync_source(src.id);
+fn dispatch(conn: &mut Conn, id: u64, request: ClientMessage) -> ServerMessage {
+    let Some(shared) = conn.source.clone() else {
+        return ServerMessage::Error {
+            id,
+            message: "this source is closed".into(),
+        };
+    };
+    let mut src = lock(&shared);
+    if src.closed.is_some() {
+        return ServerMessage::Error {
+            id,
+            message: "this source is closed".into(),
+        };
+    }
     let view = &mut conn.view;
     match request {
         ClientMessage::Auth { .. } => unreachable!("auth carries no id"),
+        ClientMessage::Close { .. } => ServerMessage::Error {
+            id,
+            message: "close is a request of the source list, not of a source tab".into(),
+        },
         ClientMessage::Query {
             filters,
             search,
@@ -467,17 +657,26 @@ fn dispatch(shared: &Shared, conn: &mut Conn, id: u64, request: ClientMessage) -
 }
 
 /// Everything that changed since this connection was last told, as cumulative values.
-fn notifications(shared: &Shared, conn: &mut Conn) -> Vec<ServerMessage> {
-    let mut src = lock(shared);
+/// A source that went away is announced once and then let go of.
+fn notifications(conn: &mut Conn) -> Vec<ServerMessage> {
+    let Some(shared) = conn.source.clone() else {
+        return Vec::new();
+    };
+    let mut src = lock(&shared);
+    if let Some(reason) = src.closed {
+        drop(src);
+        conn.source = None;
+        conn.view = View::new();
+        return vec![ServerMessage::Closed { reason }];
+    }
     let mut out = Vec::new();
-    let current = (src.id, src.session.epoch());
-    if conn.sent.source != Some(current) {
-        if conn.sent.source.is_some() {
+    let epoch = src.session.epoch();
+    if conn.sent.epoch != Some(epoch) {
+        if conn.sent.epoch.is_some() {
             out.push(ServerMessage::Reset);
             conn.sent.counts = None;
         }
-        conn.sync_source(src.id);
-        conn.sent.source = Some(current);
+        conn.sent.epoch = Some(epoch);
     }
     if let Some(total) = src.total_bytes {
         let progress = (

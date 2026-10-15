@@ -53,17 +53,16 @@ entries.
   fifteen entries
 
 ### Requirement: A hash is applied on load
-On page load with a hash present, the application SHALL apply the encoded state before or
-immediately after parsing, so the user sees the filtered view rather than the full one followed
-by a jump.
+On page load at `/l/<id>` with a hash present, the application SHALL apply the encoded state as its
+first query, so the user sees the filtered view rather than the full one followed by a jump.
 
 #### Scenario: Fresh tab reproduces the view
-- **WHEN** the URL of a filtered view is opened in a new tab and the same file is selected
-- **THEN** the same filters, range and query are active and the view matches (PRD Flow 3 step 4)
+- **WHEN** the URL of a filtered view is opened in a new tab while its source is still loaded
+- **THEN** the same source, filters, range and query are active and the view matches
 
 #### Scenario: Format override from the hash
 - **WHEN** the hash carries a format override
-- **THEN** detection is skipped and the named format is used, as `log-parsing-core` specifies
+- **THEN** detection is skipped and the named format is used for that source
 
 ### Requirement: A malformed hash is reported, not ignored
 An unparsable or partially unknown hash SHALL produce a visible notice naming what could not be
@@ -79,13 +78,13 @@ applied, and SHALL apply the parts that were valid rather than silently discardi
 
 ### Requirement: The sharing caveat is stated
 The UI SHALL make clear that a shared URL carries the search text and field values it encodes,
-which are fragments of the log, so a link pasted outside the machine discloses them even though
-the log itself never left the browser.
+which are fragments of the log, so a link pasted outside the machine discloses them; and that the
+link names a source of a running `looqlog` process, so it does not work on another machine or after
+that process exits.
 
 #### Scenario: Sharing affordance carries the warning
 - **WHEN** the user copies the URL through an affordance the application provides
-- **THEN** the caveat about what the hash contains is presented at that moment, not only in the
-  README
+- **THEN** both caveats are presented at that moment, not only in the README
 
 ### Requirement: A bad column width never blocks the log
 A column width that is malformed, out of range, or names a column that does not exist SHALL be

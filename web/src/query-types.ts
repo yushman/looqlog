@@ -89,9 +89,11 @@ export interface StatsDto {
   finished: boolean;
 }
 
+export type SourceKind = "argv" | "stdin" | "upload";
+
 export interface SourceInfoDto {
-  kind: "file" | "stdin";
-  name: string | null;
+  kind: SourceKind;
+  name: string;
   totalBytes: number | null;
   error: string | null;
   warning: string | null;
@@ -99,6 +101,21 @@ export interface SourceInfoDto {
   warnBytes: number;
   capBytes: number;
 }
+
+/** One row of the landing's source list (`crates/looqlog/src/source.rs`, `SourceRow`). */
+export interface SourceRowDto {
+  id: string;
+  name: string;
+  kind: SourceKind;
+  /** File size, or bytes read so far for stdin. */
+  size: number;
+  state: "parsing" | "live" | "ended" | "error";
+  tabs: number;
+  error: string | null;
+}
+
+/** Why a tab's source is gone (`query-api` spec). */
+export type CloseReason = "unknown" | "closed" | "unloaded" | "budget";
 
 export interface StatsReplyDto {
   source: SourceInfoDto;
@@ -159,14 +176,17 @@ export type ClientRequest =
   | { type: "buckets"; span?: TimeRangeDto; fullSpan: boolean }
   | { type: "set_format"; format: string | null; tzOffsetMinutes: number | null }
   | { type: "toggle_chain"; root: number }
-  | { type: "stats" };
+  | { type: "stats" }
+  | { type: "close"; source: string };
 
 export type Notification =
   | { type: "progress"; bytes: number; total: number; done: boolean }
   | { type: "grown"; total: number; matched: number; rowCount: number }
   | { type: "evicted"; count: number }
   | { type: "ended" }
-  | { type: "reset" };
+  | { type: "reset" }
+  | { type: "closed"; reason: CloseReason }
+  | { type: "sources"; sources: SourceRowDto[] };
 
 export type ServerMessage =
   | { type: "reply"; id: number; data: unknown }

@@ -252,18 +252,6 @@ export class LooqlogFilterBar extends HTMLElement {
     this.rangeStateEl.textContent = range ? "narrowed" : "all";
   }
 
-  /** New file/stream: local UI state resets, but this does NOT itself notify the
-   * shell — the caller is already mid-reset and recomputes its own predicate from
-   * the now-empty state directly. */
-  reset(): void {
-    this.clearSearchDebounce();
-    this.fieldFilters = new Map();
-    this.queryError = null;
-    this.searchInputEl.value = "";
-    this.syncSections();
-    this.renderError();
-  }
-
   /** Applies filters/query decoded from the URL hash (`url-state` spec). Values are
    * accepted unconditionally — a hash may name a value the inventory hasn't
    * reported yet in a fresh live session — but the caller (`looqlog-app.ts`) checks

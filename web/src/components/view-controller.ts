@@ -88,14 +88,6 @@ export class ViewController {
     void this.runQuery();
   }
 
-  /** Clears filters, search and range, without querying. */
-  resetState(): void {
-    this.state = { filters: new Map(), search: "", range: null };
-    this.els.filterBar.reset();
-    this.els.filterBar.setActiveRange(null);
-    this.els.timeline.setActiveRange(null);
-  }
-
   /** Sends the current view state and redraws everything that reads it. */
   async runQuery(): Promise<QueryReplyDto | null> {
     const seq = ++this.querySeq;

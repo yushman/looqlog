@@ -110,11 +110,13 @@ fn main() {
                 session.finish();
                 let retained = LIVE.load(Ordering::Relaxed) - before;
                 println!(
-                    "session {format}: {mib} MiB in, {} entries, {} raw bytes, heap {} bytes = {:.2} bytes per input byte",
+                    "session {format}: {mib} MiB in, {} entries, {} raw bytes, heap {} bytes = {:.2} bytes per input byte, retained_bytes() {} = {:.2}x heap",
                     session.total(),
                     session.retained_raw_bytes(),
                     retained,
-                    retained as f64 / bytes as f64
+                    retained as f64 / bytes as f64,
+                    session.retained_bytes(),
+                    session.retained_bytes() as f64 / retained as f64
                 );
             }
         }

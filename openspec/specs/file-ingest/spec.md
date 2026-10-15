@@ -6,19 +6,19 @@ startup and browser uploads — with progress, cancellation, size limits and nat
 measurement (ADR-0010).
 ## Requirements
 ### Requirement: The argv path is read by the backend
-When the CLI is given a positional path, the backend SHALL read and parse that file at startup,
-once, without following later appends. The page SHALL show the log without requiring the user to
-pick it. A path that cannot be read SHALL NOT prevent the server from starting; the failure SHALL
-be reported on the page and printed on the terminal.
+Each positional path SHALL become its own source, read and parsed by the backend at startup, once,
+without following later appends. Its tab SHALL show the log without requiring the user to pick it.
+A path that cannot be read SHALL NOT prevent the server from starting; the failure SHALL be printed
+on the terminal and shown as that source's error state.
 
 #### Scenario: Zero-click open
-- **WHEN** the user runs `looqlog tests/fixtures/sample.jsonl` and opens the printed URL
+- **WHEN** the user runs `looqlog tests/fixtures/sample.jsonl` and opens the printed source URL
 - **THEN** the page shows the fixture's entries with no file picker step
 
 #### Scenario: Unreadable path
 - **WHEN** the user runs `looqlog does-not-exist.log`
-- **THEN** the server starts, the terminal names the path and the error, and the page shows the
-  same error with an option to upload a file instead
+- **THEN** the server starts, the terminal names the path and the error, and that source's tab
+  shows the same error with an option to upload a file instead
 
 #### Scenario: Large argv file
 - **WHEN** the argv file is above the warning threshold and below the hard cap
@@ -37,19 +37,20 @@ be reported on the page and printed on the terminal.
 The page SHALL let the user pick or drop a file, and SHALL send its contents to the backend with
 `POST /upload`, streamed, with the token in the `X-Looqlog-Token` header. The backend SHALL parse
 the body as it arrives and SHALL NOT buffer the whole body before parsing. A successful upload
-SHALL replace the current file source and notify connected clients with `reset`.
+SHALL create a new source and reply `201` with its id; it SHALL NOT replace or alter any existing
+source. Uploads SHALL be accepted whether or not the process has a stdin source.
 
-#### Scenario: Picked file is shown
-- **WHEN** the user picks a `.jsonl` fixture in the page
-- **THEN** it is uploaded, parsed by the backend, and its entries are shown
+#### Scenario: Picked file becomes a source
+- **WHEN** the user picks a `.jsonl` fixture on the landing
+- **THEN** it is uploaded, a new source appears, and the tab navigates to that source's URL
 
 #### Scenario: Drop is equivalent to pick
 - **WHEN** the user drops a log file onto the page
 - **THEN** it is handled identically to a picked file
 
-#### Scenario: Upload is refused in stdin mode
-- **WHEN** the process is in stdin mode and an upload is attempted
-- **THEN** the backend rejects it with a message that this process is showing a stream
+#### Scenario: Upload next to stdin
+- **WHEN** the process is reading stdin and the user uploads a file
+- **THEN** the upload becomes a separate source and the stdin source is unaffected
 
 ### Requirement: Ingest reports progress
 While a file is being parsed, the backend SHALL report progress as bytes ingested out of the total,
@@ -60,13 +61,16 @@ and entries parsed so far SHALL be queryable before the file is finished.
 - **THEN** the page shows progress advancing and can scroll the entries parsed so far
 
 ### Requirement: A new ingest cancels the previous one
-Starting an upload while a previous file is still being ingested SHALL stop the previous ingest;
-none of its entries SHALL remain once the new file's ingest has begun successfully.
+Ingests of different sources SHALL run independently. Aborting an upload — by the user leaving
+mid-upload, a failed read, or the memory budget — SHALL drop only that upload's partial source.
 
-#### Scenario: Second upload mid-parse
-- **WHEN** the user uploads a second file while the first is still parsing
-- **THEN** only the second file's entries are shown and the field inventory contains nothing from
-  the first
+#### Scenario: Two uploads at once
+- **WHEN** two tabs upload different files at the same time
+- **THEN** two sources are created and each holds only its own file's entries
+
+#### Scenario: Aborted upload leaves nothing behind
+- **WHEN** an upload is aborted midway
+- **THEN** no source for it remains in the registry
 
 ### Requirement: Parse throughput is measured natively
 Parse throughput and index-build cost SHALL be measured with `cargo bench` on `looqlog-core` and

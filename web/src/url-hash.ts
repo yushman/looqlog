@@ -35,6 +35,12 @@ import { DEFAULT_COLUMN_WIDTHS, encodeColumnWidths, parseColumnWidths, type Colu
 import { encodeCollapsedPanes, parseCollapsedPanes, type CollapsedPanes, type CollapsiblePane } from "./panes";
 import type { TimeRange } from "./time-range";
 
+/** The share caveats, presented at the moment of copying (`url-state` spec). */
+export const SHARE_CAVEAT =
+  "Copied — this link encodes your search text and filter values, which are fragments of the log itself. " +
+  "It names a source of this running looqlog process, so it does not work on another machine or after " +
+  "the process exits.";
+
 export interface HashState {
   range: TimeRange | null;
   /** Field name -> selected values (D1: OR within, so a set). */

@@ -33,7 +33,7 @@ class FakeSocket implements SocketLike {
   }
 }
 
-function setup() {
+function setup(source: string | null = "abcdefgh") {
   const sockets: FakeSocket[] = [];
   const states: ConnectionState[] = [];
   const notes: Notification[] = [];
@@ -41,6 +41,7 @@ function setup() {
   const client = new QueryClient({
     url: "ws://x/ws",
     token: "tok",
+    source,
     onState: (s) => states.push(s),
     onNotification: (n) => notes.push(n),
     onConnected: () => {
@@ -71,9 +72,23 @@ describe("QueryClient", () => {
   it("sends the token as the first frame and goes live on the first message", () => {
     const { sockets, states, live, connectedCount } = setup();
     live(sockets[0]!);
-    expect(JSON.parse(sockets[0]!.sent[0]!)).toEqual({ type: "auth", token: "tok" });
+    expect(JSON.parse(sockets[0]!.sent[0]!)).toEqual({ type: "auth", token: "tok", source: "abcdefgh" });
     expect(states).toEqual(["live"]);
     expect(connectedCount()).toBe(1);
+  });
+
+  it("authenticates the landing with no source", () => {
+    const { sockets } = setup(null);
+    sockets[0]!.emit("open");
+    expect(JSON.parse(sockets[0]!.sent[0]!)).toEqual({ type: "auth", token: "tok", source: null });
+  });
+
+  it("does not re-query when the first message says the source is gone", () => {
+    const { sockets, notes, connectedCount } = setup();
+    sockets[0]!.emit("open");
+    sockets[0]!.server({ type: "closed", reason: "unknown" });
+    expect(connectedCount()).toBe(0);
+    expect(notes).toEqual([{ type: "closed", reason: "unknown" }]);
   });
 
   it("matches replies to requests by id", async () => {
