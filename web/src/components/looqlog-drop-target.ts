@@ -1,9 +1,6 @@
-// Presentational: a file picker + drop target. Owns no parse state (design.md D7) —
-// it only reads a `File` from a user gesture and dispatches it upward. Preserves
-// ADR-0007 (the CLI path is a hint, not an auto-loaded file — the user still has to
-// pick it). The ADR-0002 no-network guarantee is stated by the shell's own privacy
-// surface, which is worded per mode (TDR §12) and therefore cannot live in a
-// component only file mode mounts.
+// Presentational: a file picker + drop target. Owns no source state (design.md D7) —
+// it only reads a `File` from a user gesture and dispatches it upward; the shell
+// uploads it to the local backend (ADR-0010, `file-ingest` spec).
 
 export class LooqlogDropTarget extends HTMLElement {
   private hintHtml = "";

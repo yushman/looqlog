@@ -14,7 +14,7 @@ import { COLLAPSIBLE_PANES, type CollapsedPanes, type CollapsiblePane } from "..
 export type WorkspacePane =
   /** Mode-specific header line: status (file mode), connection + rate (stream mode). */
   | "topbar"
-  /** Full-width notices that must not be collapsed away: errors, confirms, gap/eviction notes. */
+  /** Full-width notices that must not be collapsed away: errors, confirms, eviction and connection notes. */
   | "messages"
   /** The full-width collapsible timeline row. */
   | "timeline"

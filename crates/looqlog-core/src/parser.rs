@@ -117,6 +117,24 @@ impl Parser {
         parser
     }
 
+    /// Number the first consumed line `first_line` instead of 1, so a re-parse of
+    /// lines retained after eviction keeps their ordinals.
+    pub fn starting_at_line(mut self, first_line: usize) -> Self {
+        self.line_no = first_line.saturating_sub(1);
+        self
+    }
+
+    /// Ends the detection hold early — for a stream whose opening lines arrived and
+    /// then went quiet — without ending the input. A no-op unless still sampling with
+    /// at least one line: detection on an empty sample would lock in plain text.
+    pub fn force_detection(&mut self) -> Vec<Entry> {
+        let mut out = Vec::new();
+        if matches!(&self.state, State::Sampling { sample, .. } if !sample.is_empty()) {
+            self.finalize_detection(&mut out);
+        }
+        out
+    }
+
     /// Feed the next chunk of bytes. Returns entries completed by this call; an
     /// incomplete trailing line is held until the next chunk or `finish()`.
     pub fn feed(&mut self, chunk: &[u8]) -> Vec<Entry> {

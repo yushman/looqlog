@@ -2,7 +2,7 @@ name: Release
 
 # `packaging` spec, "A version tag publishes downloadable binaries" (design D1): a
 # `v*` tag is the single source of truth for what shipped. This workflow never
-# invokes wasm-pack or npm — the frontend artifacts are vendored in
+# invokes npm — the frontend artifacts (JS bundle and stylesheet) are vendored in
 # crates/looqlog/assets/ (ADR-0008), and CI's frontend-artifact-staleness job already
 # guards their freshness on every push to main.
 
@@ -155,6 +155,12 @@ jobs:
               bytes="$(cat "$f")"
               mib=$(awk "BEGIN { printf \"%.2f\", ${bytes}/1048576 }")
               echo "- \`${asset}\`: ${bytes} bytes (~${mib} MiB)"
+            done
+            echo
+            echo "Embedded frontend bundle:"
+            echo
+            for f in crates/looqlog/assets/assets/index.js crates/looqlog/assets/assets/index.css; do
+              echo "- \`$(basename "$f")\`: $(wc -c < "$f" | tr -d ' ') bytes"
             done
           } > release-body.md
         env:

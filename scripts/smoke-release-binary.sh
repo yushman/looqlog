@@ -10,11 +10,9 @@
 # crates/looqlog/src/cli.rs selects stdin mode whenever stdin is not a TTY, and on a
 # CI runner stdin is never a TTY — `< /dev/null` does not make it one. So
 # `looqlog some.log` on a runner picks stdin mode regardless of the path argument
-# (design D3). File mode is client-side by construction (ADR-0002/ADR-0007): the
-# backend's entire file-mode duty is printing a hint string, and it never reads the
-# file — a pty would add coverage of that hint string, not of parsing. So this
-# script asserts what is genuinely reachable headlessly: the server serving the
-# embedded UI, and stdin lines reaching a WebSocket client.
+# (design D3). Both modes feed the same backend session (ADR-0010), so this script
+# asserts what is genuinely reachable headlessly: the server serving the embedded UI,
+# and a stdin line becoming queryable by an authenticated WebSocket client.
 
 set -euo pipefail
 
@@ -94,16 +92,12 @@ INDEX_CODE=$(curl -s -o "$WORKDIR/index.html" -w "%{http_code}" "$BASE_URL/")
 [ -s "$WORKDIR/index.html" ] || fail "GET / body" "non-empty body" "empty body"
 echo "ok: / returned 200 with a non-empty body"
 
-echo "== GET /wasm/core.wasm =="
-WASM_HEADERS=$(curl -s -D - -o "$WORKDIR/core.wasm" "$BASE_URL/wasm/core.wasm")
-echo "$WASM_HEADERS" | grep -q "^HTTP/[0-9.]* 200" ||
-    fail "GET /wasm/core.wasm status" "200" "$(echo "$WASM_HEADERS" | head -1)"
-echo "$WASM_HEADERS" | grep -qi "^content-type: *application/wasm" ||
-    fail "GET /wasm/core.wasm Content-Type" "application/wasm" "$(echo "$WASM_HEADERS" | grep -i '^content-type:' || echo '(missing)')"
-[ -s "$WORKDIR/core.wasm" ] || fail "GET /wasm/core.wasm body" "non-empty body" "empty body"
-echo "ok: /wasm/core.wasm returned 200 with application/wasm"
+echo "== no WebAssembly route =="
+WASM_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/wasm/core.wasm")
+[ "$WASM_CODE" = "404" ] || fail "GET /wasm/core.wasm status" "404 (no WASM is served, ADR-0010)" "$WASM_CODE"
+echo "ok: no WASM route"
 
-echo "== stdin line reaches a WebSocket client on /ws =="
+echo "== stdin line is queryable by a WebSocket client on /ws =="
 TOKEN=$(sed -n 's/.*<template id="token-template">\([^<]*\)<\/template>.*/\1/p' "$WORKDIR/index.html")
 [ -n "$TOKEN" ] || fail "token-template present in served page" "a non-empty per-process token" "no token found in GET / body"
 
@@ -194,8 +188,11 @@ try:
     ws_handshake(sock)
     send_text_frame(sock, json.dumps({"type": "auth", "token": token}))
 
+    # Wait for a `grown` notification counting the line, then ask for it with a
+    # `window` request and look for it in the reply (query-api spec).
     deadline = time.time() + 8
     found = False
+    requested = False
     while time.time() < deadline:
         sock.settimeout(max(0.1, deadline - time.time()))
         try:
@@ -206,20 +203,25 @@ try:
             break
         if opcode != 0x1:  # only text frames carry our envelopes
             continue
-        if expected_line in payload.decode(errors="replace"):
-            found = True
+        msg = json.loads(payload.decode(errors="replace"))
+        if msg.get("type") == "grown" and msg.get("total", 0) >= 1 and not requested:
+            send_text_frame(sock, json.dumps({"type": "window", "id": 1, "offset": 0, "limit": 10}))
+            requested = True
+        elif msg.get("type") == "reply" and msg.get("id") == 1:
+            rows = msg.get("data", {}).get("rows", [])
+            found = any(r.get("message") == expected_line for r in rows)
             break
 
     if not found:
-        print("expected line never arrived over /ws", file=sys.stderr)
+        print("expected line was never returned by a window request", file=sys.stderr)
         sys.exit(1)
 finally:
     sock.close()
 PYEOF
 then
     cat "$WORKDIR/stdout.log" "$WORKDIR/stderr.log" >&2 || true
-    fail "stdin line delivered over /ws" "a text frame containing '$SMOKE_LINE'" "no matching frame received (see log above)"
+    fail "stdin line queryable over /ws" "a window row with message '$SMOKE_LINE'" "no matching row returned (see log above)"
 fi
-echo "ok: /ws delivered the piped stdin line"
+echo "ok: the piped stdin line is queryable over /ws"
 
 echo "all smoke checks passed for $BIN"

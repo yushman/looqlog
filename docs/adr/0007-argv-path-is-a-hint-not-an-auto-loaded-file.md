@@ -1,6 +1,6 @@
 # 0007. The argv path is a hint, not an auto-loaded file
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0010
 - **Date:** 2026-08-09
 
 ## Context

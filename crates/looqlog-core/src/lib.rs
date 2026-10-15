@@ -1,8 +1,8 @@
 //! Target-agnostic log parsing core (ADR-0005).
 //!
 //! This crate has no `wasm-bindgen`, no `web-sys`, and no `std::fs` dependency, so it
-//! can be reused unmodified by a native adapter (future MCP mode) as well as the wasm
-//! adapter (`looqlog-wasm`).
+//! is reused unmodified by the `looqlog` server (`Session`, ADR-0010) and by a future
+//! native MCP adapter.
 //!
 //! The real parsing surface — the incremental `Parser`, the JSON Lines / logfmt /
 //! plain-text format parsers, auto-detection, and `Entry`/field extraction — lives in
@@ -13,14 +13,19 @@
 //! it. `browser-app-shell` is expected to rewire the page onto the real `Parser` and
 //! retire this stub.
 
+pub mod bucket;
 pub mod detect;
 pub mod diagnostics;
+pub mod dto;
 pub mod entry;
 pub mod fields;
 pub mod format;
+pub mod index;
 pub mod level;
 pub mod parser;
 pub mod parsers;
+pub mod query;
+pub mod session;
 pub mod timestamp;
 
 pub use detect::{DetectionOutcome, DetectionResult};
@@ -30,6 +35,7 @@ pub use fields::{FieldInventory, FieldStats};
 pub use format::Format;
 pub use level::Level;
 pub use parser::Parser;
+pub use session::{QueryInput, Session, SessionConfig, View};
 pub use timestamp::{ParseContext, TimeZonePolicy, TimestampShape};
 
 /// Result of parsing a JSON-Lines input: how many lines parsed as valid JSON, and a

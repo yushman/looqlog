@@ -2,16 +2,18 @@ mod assets;
 mod cli;
 mod protocol;
 mod server;
+mod source;
 mod stdin;
 
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 
 use cli::{Cli, Mode};
 use server::AppState;
+use source::Source;
 
 const SSH_FORWARD_HINT: &str =
     "if this is a remote/headless machine, forward it with: ssh -L <port>:127.0.0.1:<port> <host>";
@@ -47,10 +49,10 @@ async fn main() {
     // not the loopback address.
     if host != IpAddr::V4(Ipv4Addr::LOCALHOST) {
         println!(
-            "WARNING: binding to {host} exposes the live stdin log stream on an \
-             unauthenticated WebSocket to the network (ADR-0003). Anyone who can \
-             reach this host and port can read stdin log lines, which may contain \
-             credentials or PII."
+            "WARNING: binding to {host} makes log contents — the opened file, uploaded \
+             files and stdin — reachable from the network (ADR-0003). Anyone who can \
+             reach this host and port and obtain the page token can read them, and they \
+             may contain credentials or PII."
         );
     }
 
@@ -75,64 +77,53 @@ async fn main() {
         .port();
     let url = format!("http://{host}:{actual_port}");
 
-    // File mode only: a `stat`-level existence check purely for the startup/page
-    // hint text. This is not a read of the file's contents — `local-server` forbids
-    // opening or reading the log file, not verifying it exists (ADR-0002/ADR-0007).
-    let mut path_hint: Option<String> = None;
-    if mode == Mode::File {
-        if let Some(path) = &args.path {
-            let display = path.display().to_string();
-            if std::fs::metadata(path).is_err() {
-                eprintln!(
-                    "warning: could not verify that {display} exists; the browser \
-                     will still let you pick a file"
-                );
-            }
-            path_hint = Some(display);
-        }
-    }
-
-    let hint_html = match &path_hint {
-        Some(path) => format!(
-            "Open <code>{}</code> below — this is a hint from the command line; the \
-             file is read by your browser, not by <code>looqlog</code> (see ADR-0007).",
-            assets::html_escape(path)
-        ),
-        None => "Open a log file below.".to_string(),
-    };
-
-    // `security` spec, design.md D1: one random token per process, embedded in the
-    // served page and required in the `/ws` handshake payload. Generated once here
-    // (never per-request) so every page load for the life of this process — first
-    // load, reload, a second tab — gets the same value and can all authenticate.
+    // `security` spec: one random token per process, embedded in the served page and
+    // required by `/ws` and `/upload`. Generated once, so every page load for the life
+    // of this process — first load, reload, a second tab — can authenticate.
     let token = generate_token();
 
-    let (stdin_tx, stdin_buffer, mode_json) = match mode {
+    let source = Arc::new(Mutex::new(Source::new(
+        mode == Mode::Stdin,
+        (mode == Mode::Stdin).then(|| args.max_lines_or_default()),
+    )));
+    let path = args.path.as_ref().filter(|_| mode == Mode::File);
+    let mode_json = match mode {
         Mode::Stdin => {
-            let max_lines = args.max_lines_or_default();
-            let (tx, buffer) = stdin::spawn_stdin_reader(max_lines);
-            (
-                Some(tx),
-                Some(buffer),
-                format!(r#"{{"mode":"stdin","maxLines":{max_lines}}}"#),
+            stdin::spawn_stdin_reader(source.clone());
+            format!(
+                r#"{{"mode":"stdin","maxLines":{}}}"#,
+                args.max_lines_or_default()
             )
         }
-        Mode::File => (None, None, r#"{"mode":"file"}"#.to_string()),
+        Mode::File => {
+            if let Some(path) = path {
+                // `file-ingest` spec: an unreadable path does not stop the server; the
+                // page shows the same error and offers an upload instead.
+                match source::open_argv(&source, path) {
+                    Ok(None) => {}
+                    Ok(Some(warning)) => println!("warning: {warning}"),
+                    Err(err) => eprintln!("error: {err}"),
+                }
+            }
+            r#"{"mode":"file"}"#.to_string()
+        }
     };
 
     let state = Arc::new(AppState {
-        hint_html,
         mode_json,
         token,
-        stdin_tx,
-        stdin_buffer,
+        source,
+        bound: listener
+            .local_addr()
+            .expect("bound listener has a local address"),
     });
     let router = server::build_router(state);
 
+    let path_display = path.map(|p| p.display().to_string());
     print_banner(
         &url,
         mode,
-        path_hint.as_deref(),
+        path_display.as_deref(),
         args.max_lines_or_default(),
     );
 
@@ -172,11 +163,11 @@ fn generate_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn print_banner(url: &str, mode: Mode, path_hint: Option<&str>, max_lines: usize) {
+fn print_banner(url: &str, mode: Mode, path: Option<&str>, max_lines: usize) {
     println!("looqlog v{}", env!("CARGO_PKG_VERSION"));
     println!("\u{2192} {url}");
-    match (mode, path_hint) {
-        (Mode::File, Some(path)) => println!("  open {path} in the browser to view it"),
+    match (mode, path) {
+        (Mode::File, Some(path)) => println!("  opening {path}"),
         (Mode::File, None) => println!("  open a log file in the browser"),
         (Mode::Stdin, _) => println!(
             "  streaming stdin — connect a browser to view it live (max-lines: {max_lines})"

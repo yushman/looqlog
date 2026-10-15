@@ -8,7 +8,7 @@
 // warning a user has to expand to discover would not satisfy "diagnostics reach the
 // user"; a summary line that always states the count does.
 
-import type { DiagnosticsSummaryDto } from "../wasm-types";
+import type { DiagnosticsSummaryDto } from "../query-types";
 import { dispatchRailAttention } from "./looqlog-workspace";
 
 /** Same threshold the expanded panel uses for its warning styling. */
@@ -56,7 +56,7 @@ export class LooqlogDiagnostics extends HTMLElement {
 
   /** `cumulative`: true for a live stream — the one long-lived parser instance
    * never resets, so these counts describe everything ever seen, not what is
-   * currently retained after client-side eviction (`live-tail-ui` spec, "Field
+   * currently retained after eviction (`live-tail-ui` spec, "Field
    * inventory reported as cumulative"). File mode leaves this false. */
   setDiagnostics(
     summary: DiagnosticsSummaryDto | null,

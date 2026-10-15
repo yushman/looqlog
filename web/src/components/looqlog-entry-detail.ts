@@ -5,49 +5,55 @@
 // is being described, and an evicted selection is reported as evicted rather than
 // replaced by whatever now sits at that index.
 
-import type { EntryIndex } from "../entry-index";
-import { findMatchRanges, type CompiledQuery } from "../predicate";
-import type { EntryDto, FieldValueDto } from "../wasm-types";
+import type { EntryReplyDto, FieldValueDto, RowDto } from "../query-types";
+import type { ViewSession } from "../view-session";
+import { highlightHtml } from "./looqlog-entry-table";
 
 export class LooqlogEntryDetail extends HTMLElement {
-  private index: EntryIndex | null = null;
+  private session: ViewSession | null = null;
   private ordinal: number | null = null;
-  private compiledQuery: CompiledQuery = { kind: "none" };
-  /** What the pane is currently describing, so a live tick that changes nothing
-   * about the selection doesn't rewrite the pane eighty times a second. */
+  /** What the pane is currently describing, so a refresh that changes nothing about
+   * the selection doesn't rewrite the pane. */
   private renderedKey: string | null = null;
+  private fetchSeq = 0;
 
   connectedCallback(): void {
-    this.render();
+    this.show(null);
   }
 
-  setIndex(index: EntryIndex | null): void {
-    this.index = index;
+  setSource(session: ViewSession | null): void {
+    this.session = session;
     this.ordinal = null;
-    this.render();
+    this.show(null);
   }
 
   setSelectedOrdinal(ordinal: number | null): void {
     this.ordinal = ordinal;
-    this.render();
+    this.refresh();
   }
 
-  /** Highlighting only, mirroring the table's own `setQuery` (`search` spec). */
-  setQuery(compiled: CompiledQuery): void {
-    this.compiledQuery = compiled;
-    this.renderedKey = null; // highlighting changed even if the selection didn't
-    this.render();
-  }
-
-  /** Called after live append/eviction: the selected ordinal may have just been
-   * evicted, which changes what this pane says without changing the selection. */
+  /** Re-fetches the selection: after live eviction the entry may be gone, and after a
+   * query change its highlighting differs. */
   refresh(): void {
-    this.render();
+    const ordinal = this.ordinal;
+    if (ordinal === null || !this.session) {
+      this.show(null);
+      return;
+    }
+    const seq = ++this.fetchSeq;
+    this.session
+      .entry(ordinal)
+      .then((reply) => {
+        if (seq === this.fetchSeq) {
+          this.show(reply);
+        }
+      })
+      .catch(() => undefined);
   }
 
-  private render(): void {
-    const entry = this.ordinal === null ? undefined : this.index?.getByOrdinal(this.ordinal);
-    const key = `${this.ordinal ?? "none"}|${entry ? "present" : "absent"}`;
+  private show(reply: EntryReplyDto | null): void {
+    const row = reply?.row ?? null;
+    const key = `${this.ordinal ?? "none"}|${row ? `${row.matchRanges.join(";")}|${reply?.raw ?? ""}` : "absent"}`;
     if (key === this.renderedKey) {
       return;
     }
@@ -57,17 +63,20 @@ export class LooqlogEntryDetail extends HTMLElement {
       this.innerHTML = `<p class="detail-empty">Select an entry to inspect</p>`;
       return;
     }
-    if (!entry) {
+    if (reply === null) {
+      return; // still loading; keep what is shown
+    }
+    if (!row) {
       this.innerHTML = `
         <p class="detail-evicted">Entry #${this.ordinal} is no longer retained (evicted at
         <code>--max-lines</code>) — its contents are gone, not hidden.</p>`;
       return;
     }
-    this.innerHTML = renderEntryHtml(entry, this.compiledQuery);
+    this.innerHTML = renderEntryHtml(row, reply.raw);
   }
 }
 
-function renderEntryHtml(entry: EntryDto, compiled: CompiledQuery): string {
+function renderEntryHtml(entry: RowDto, raw: string | null): string {
   const fieldRows = Object.entries(entry.fields)
     .map(([key, value]) => `<tr><th>${escapeHtml(key)}</th><td>${renderFieldValue(value)}</td></tr>`)
     .join("");
@@ -78,8 +87,9 @@ function renderEntryHtml(entry: EntryDto, compiled: CompiledQuery): string {
       <dt>level</dt><dd>${entry.level ? escapeHtml(entry.level) : "no level extracted"}</dd>
     </dl>
     <p class="detail-message-label">message</p>
-    <pre class="detail-message">${highlightHtml(entry.message, compiled)}</pre>
+    <pre class="detail-message">${highlightHtml(entry.message, entry.matchRanges)}</pre>
     ${fieldRows ? `<p class="detail-fields-label">fields</p><table class="detail-fields">${fieldRows}</table>` : ""}
+    ${raw !== null ? `<p class="detail-fields-label">raw line</p><pre class="detail-message">${escapeHtml(raw)}</pre>` : ""}
   `;
 }
 
@@ -87,8 +97,8 @@ function renderEntryHtml(entry: EntryDto, compiled: CompiledQuery): string {
  * same reason: an entry dated by inference sits at a point on the timeline the log
  * never stated, and a user who cannot see that has no way to distinguish it from a
  * fact. `timestampYearInferred` fires on the year-less shapes (syslog RFC 3164, klog),
- * where the year comes from the reference instant the worker passes in. */
-function renderTimestamp(entry: EntryDto): string {
+ * where the year comes from the reference instant the backend supplies. */
+function renderTimestamp(entry: RowDto): string {
   if (!entry.timestamp) {
     return "no timestamp extracted";
   }
@@ -126,24 +136,6 @@ function escapeHtml(input: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-}
-
-/** Same `<span class="hl">`-not-`<mark>` reasoning as `looqlog-entry-table.ts`'s copy
- * of this helper (a measured cost, see that file's comment). */
-function highlightHtml(text: string, compiled: CompiledQuery): string {
-  const ranges = findMatchRanges(text, compiled);
-  if (ranges.length === 0) {
-    return escapeHtml(text);
-  }
-  const parts: string[] = [];
-  let cursor = 0;
-  for (const [start, end] of ranges) {
-    parts.push(escapeHtml(text.slice(cursor, start)));
-    parts.push(`<span class="hl">${escapeHtml(text.slice(start, end))}</span>`);
-    cursor = end;
-  }
-  parts.push(escapeHtml(text.slice(cursor)));
-  return parts.join("");
 }
 
 customElements.define("looqlog-entry-detail", LooqlogEntryDetail);

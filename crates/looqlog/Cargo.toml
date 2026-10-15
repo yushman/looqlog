@@ -11,7 +11,7 @@ readme = "README.md"
 # transitively through `webbrowser` → `url`. `axum` wants 1.80 and `clap` 1.85, so
 # nothing here is close to the 1.74 the docs used to claim.
 rust-version = "1.86"
-keywords = ["log", "logs", "viewer", "cli", "wasm"]
+keywords = ["log", "logs", "viewer", "cli", "logfmt"]
 categories = ["command-line-utilities", "development-tools", "visualization"]
 
 [[bin]]
@@ -20,7 +20,9 @@ path = "src/main.rs"
 
 [dependencies]
 axum = { version = "0.8.9", features = ["ws"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.6.6", features = ["derive"] }
+futures-util = "=0.3.31"
 # `version` is required to publish: crates.io drops the `path` and resolves the
 # dependency from the registry, so `looqlog-core` must be published first.
 looqlog-core = { path = "../looqlog-core", version = "0.2.1" }
@@ -33,5 +35,4 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 webbrowser = "1.2.4"
 
 [dev-dependencies]
-futures-util = "=0.3.31"
 tokio-tungstenite = "0.30.0"

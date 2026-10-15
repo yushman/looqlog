@@ -2,17 +2,17 @@
 
 ## Purpose
 
-The `entry-index` capability covers the client-side time-ordered index built over parsed entries:
+The `entry-index` capability covers the backend's time-ordered index (in `looqlog-core`) built over parsed entries:
 range queries and bucket counts that do not scan every entry, entries with no usable timestamp
 tracked apart rather than given a substitute time, incremental maintenance under live append and
 front eviction at the retention limit, and unambiguous, redraw-fast half-open range queries. It is
 the data structure the timeline and the table both read from, not a UI surface of its own.
-
 ## Requirements
 ### Requirement: Time-ordered index over entries
-The application SHALL maintain an index of entries ordered by timestamp, separate from the
-input-order entry list, so that range queries and bucket counts do not scan every entry. Entries
-with no usable timestamp SHALL be tracked separately rather than assigned a substitute time.
+The backend SHALL maintain, in `looqlog-core`, an index of entries ordered by timestamp, separate
+from the input-order entry list, so that range queries and bucket counts do not scan every entry.
+Entries with no usable timestamp SHALL be tracked separately rather than assigned a substitute
+time. The browser SHALL NOT hold an index or the full entry list.
 
 #### Scenario: Out-of-order input is indexed correctly
 - **WHEN** a log contains entries whose timestamps are not monotonically increasing
@@ -21,6 +21,10 @@ with no usable timestamp SHALL be tracked separately rather than assigned a subs
 #### Scenario: Timestampless entries are held apart
 - **WHEN** a dataset contains entries with no usable timestamp
 - **THEN** they are counted in a separate group and never appear in a time-range result
+
+#### Scenario: Browser memory does not scale with the log
+- **WHEN** a 1,000,000-line file is open and the user scrolls from top to bottom
+- **THEN** the page holds at most a bounded window of rows at any time
 
 ### Requirement: Incremental maintenance under append and eviction
 The index SHALL be updated incrementally as entries are appended and as the oldest entries are
@@ -37,7 +41,8 @@ size of the dataset.
 
 ### Requirement: Range queries
 The index SHALL answer a query for a half-open time range with the entries inside it, in input
-order, and with a count, both fast enough to drive a redraw on drag.
+order, and with a count, fast enough that a range drag round trip (request to rendered result)
+drives a redraw without visible lag on a 100,000-entry dataset.
 
 #### Scenario: Range boundaries are unambiguous
 - **WHEN** a range is selected whose start coincides exactly with an entry's timestamp

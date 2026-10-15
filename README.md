@@ -1,8 +1,8 @@
 # looqlog
 
 Single-binary CLI that opens a local web UI for browsing a log file or a live stdin
-stream. Parsing happens in WebAssembly inside your own browser, so log contents never
-leave your machine.
+stream. Parsing happens in the local `looqlog` process and the browser only shows the
+result, so log contents never leave your machine.
 
 [Русская версия](README.ru.md) · [Website](https://yushman.github.io/looqlog/)
 
@@ -14,12 +14,14 @@ leave your machine.
 > events: Java stack traces, Python tracebacks and pretty-printed payloads collapse into
 > the entry they continue, and the timeline counts events rather than physical lines.
 >
-> The server, CLI, browser-side parser
+> The server, CLI, parser
 > (JSON Lines / logfmt / plain text, auto-detected — with syslog, klog, Apache/CLF and
 > Docker-wrapped lines read through the plain-text path, see "Supported log formats")
 > and live stdin streaming exist
-> end to end. File mode runs the parser in a Web Worker so a large file never
-> freezes the page; stdin mode holds a bounded ring buffer so lines emitted before a
+> end to end. Parsing, indexing, filtering and search run natively in the `looqlog`
+> process; the page asks for the rows it shows and never holds the whole log, so a
+> large file neither freezes the page nor fills the tab's memory. Stdin mode holds a
+> bounded ring buffer so lines emitted before a
 > browser connects are not lost, and a slow client never blocks the producer. A
 > `uPlot` histogram timeline shows entries per time bucket with drag-to-select range
 > narrowing, and a virtual-scrolled table renders only the visible rows regardless of
@@ -27,8 +29,8 @@ leave your machine.
 > with the full message and every extracted field. Filter chips, full-text/regex
 > search and a shareable URL hash narrow the same dataset the timeline and table show
 > — see "Filtering, search and sharing a view" below. Both surfaces track a live
-> stream that grows and evicts, filters included. A CSP, a WebSocket origin check and
-> a per-process auth token close the cross-tab hijacking gap on `/ws` (see
+> stream that grows and evicts, filters included. A CSP, origin and host checks and
+> a per-process auth token close the cross-tab hijacking gap on `/ws` and `/upload` (see
 > "Security"); file-size limits, dedicated error messages and a light/dark theme are
 > in place (see the sections below). Styling is minimal, not polished.
 
@@ -74,9 +76,9 @@ version, take the file name from the
 > installing this one. Reinstall using the instructions above and, if you like,
 > remove the old `looq` binary yourself.
 
-Building from source needs only the Rust toolchain — the compiled frontend
-(`core.wasm` + JS glue) is committed to the repository, so `cargo build`/`cargo
-install` never invoke Node.js or `wasm-pack` (see
+Building from source needs only the Rust toolchain — the compiled frontend (the JS
+bundle and the stylesheet) is committed to the repository, so `cargo build`/`cargo
+install` never invoke Node.js (see
 [ADR-0008](docs/adr/0008-vendored-frontend-artifacts.md)):
 
 ```bash
@@ -89,7 +91,7 @@ cargo build --release
 ### Which platforms are verified how
 
 Every release binary passes the same automated smoke test (server starts, serves
-the page and `core.wasm`, streams a piped stdin line over `/ws`) before it is
+the page, and a piped stdin line becomes queryable over `/ws`) before it is
 published — see `.github/workflows/release.yml`. Beyond that, only
 `aarch64-apple-darwin` has been run by hand through the three PRD usage flows
 during development (it's this project's own dev machine). `x86_64-unknown-linux-musl`,
@@ -102,20 +104,21 @@ them turns out broken in practice, that's a bug report worth filing.
 
 The `web/` directory is a Vite + TypeScript project; it's only needed if you're
 changing the frontend, not for building or installing `looqlog` itself (that path is
-Rust-only, see above). `scripts/build-frontend.sh` builds it (via `wasm-pack` +
-`npm`) and vendors the output into `crates/looqlog/assets/`, which is what actually
-ships:
+Rust-only, see above). `scripts/build-frontend.sh` builds it (via `npm`) and vendors
+the output into `crates/looqlog/assets/`, which is what actually ships:
 
 ```bash
-./scripts/build-frontend.sh   # requires Node.js + npm + wasm-pack
+./scripts/build-frontend.sh   # requires Node.js + npm
 cargo build --release
 ```
 
 ## Usage
 
-looqlog has two run modes, and — this matters — they give different privacy
-guarantees. See [ADR-0002](docs/adr/0002-wasm-browser-parsing-file-mode.md) and TDR §12
-for the full reasoning.
+looqlog has two run modes, a file or a stdin stream. In both the log is read and parsed
+by the local `looqlog` process and reaches the page over a localhost connection, so it
+never leaves your machine on the default bind — it does cross a process boundary, and
+nothing claims it stays inside the browser. See
+[ADR-0010](docs/adr/0010-parse-on-the-backend-thin-client.md) for the reasoning.
 
 ### File mode
 
@@ -123,14 +126,15 @@ for the full reasoning.
 looqlog app.log
 ```
 
-This starts the server and prints `app.log` as a **hint** — it does not open or read
-the file itself, and it can't: no browser API lets a page auto-open a path chosen by a
-server (see [ADR-0007](docs/adr/0007-argv-path-is-a-hint-not-an-auto-loaded-file.md)).
-Open the printed URL, then pick `app.log` yourself through the page's file picker or
-drag it onto the drop target. The file is read and parsed entirely in your browser;
-`looqlog` never sees its contents, which you can verify yourself — the DevTools Network
-panel stays empty after the page loads, and parsing keeps working with the network
-disabled.
+This starts the server, reads and parses `app.log`, and the printed URL opens straight
+into the log — no file picker step; progress is shown while a large file is still being
+read. The file is read once, at startup: lines appended later are not followed. If the
+path cannot be read, `looqlog` says so on the terminal and keeps serving, and the page
+shows the same error with a way to open another file.
+
+Any page can also open a file through its picker or by dropping it onto the page. That
+file is **uploaded to the local `looqlog` process** (not to any other server) and replaces
+the one shown, in every open tab. A failed upload leaves the current log as it was.
 
 ### Stdin mode
 
@@ -140,19 +144,16 @@ myapp | looqlog
 tail -f /var/log/app.log | looqlog --stdin
 ```
 
-Lines from stdin are streamed to connected browsers over an unauthenticated localhost
-WebSocket. This is a **weaker** guarantee than file mode: the data crosses a process
-boundary (CLI → browser) even though it never leaves the machine — the page's mode
-indicator says so explicitly, in different words from file mode's "never leaves the
-browser" (TDR §12).
+Lines from stdin are parsed by `looqlog` as they arrive; connected pages are told the
+stream grew and fetch the rows they show over the localhost WebSocket.
 
-The backend holds a bounded ring buffer (`--max-lines`, default 100,000) filled from
+The backend retains the most recent `--max-lines` lines (default 100,000), filled from
 process start regardless of whether a browser is connected, so `myapp | looqlog` followed
 a few seconds later by opening the browser still shows everything `myapp` already
-printed: a new or reloaded connection gets a snapshot of the buffer, then switches to
-live streaming. A slow or absent browser never blocks the producer — under sustained
-backpressure the oldest undelivered messages are dropped, and the page shows a visible
-gap marker naming how many lines were lost, never a silent shorter tail. The page also
+printed, and a reload keeps the history. A slow or absent browser never blocks the
+producer and loses nothing it cannot fetch again. Once the limit is reached the oldest
+lines are evicted, and the page shows a marker above the first row naming how many —
+never a silently shorter tail. The page also
 shows a live/connecting/ended/disconnected indicator, a lines/sec counter, autoscroll
 that pauses when you scroll away, and reconnects with backoff if the connection drops.
 
@@ -171,7 +172,8 @@ Run `looqlog --help` for the full flag list (`--port`, `--host`, `--open`,
 
 looqlog auto-detects **JSON Lines**, **logfmt** and **plain text** by sampling the first
 100 non-empty lines; a format wins only if at least 80% of them parse under it. You can
-override the choice with `#format=json|logfmt|plain` in the URL.
+override the choice with `#format=json|logfmt|plain` in the URL. The override re-parses the
+source itself, so every open tab on the same `looqlog` process switches with it.
 
 Plain text is not a dead end. Most real log lines are a *prefix* carrying when and how
 bad, followed by a *payload* carrying everything else, so looqlog reads both:
@@ -240,8 +242,8 @@ unwrapped: the `log` member is parsed as a line in its own right, `time` supplie
 timestamp when the inner line has none, and `stream` becomes a field. So
 `docker logs > file.log` reads as the application's own log, not as an escaped blob.
 
-**Inferred years.** syslog, klog and logcat timestamps carry no year. looqlog infers one from your
-browser's clock — stepping back a year rather than dating an entry in the future — and
+**Inferred years.** syslog, klog and logcat timestamps carry no year. looqlog infers one from the
+clock of the machine it runs on — stepping back a year rather than dating an entry in the future — and
 says so on every affected entry (*"year inferred — this timestamp shape carries none"* in
 the detail view). A log older than about a year will be dated wrong; the flag is there so
 you can tell.
@@ -284,7 +286,9 @@ substring by default. Prefix a query with `re:` for a regular expression, applie
 exactly as written (no implicit case-insensitivity) — `re:^ERROR.*timeout`. An
 invalid regex shows an inline error and leaves the previous results on screen rather
 than emptying the table, so "bad regex" and "valid search, no matches" never look the
-same. To search for literal text that itself starts with `re:`, escape it with a
+same. Expressions use the Rust [`regex`](https://docs.rs/regex) syntax: **look-around
+(`(?=…)`, `(?<!…)`) and backreferences (`\1`) are not supported**, and an expression
+using them is reported as an error rather than run. To search for literal text that itself starts with `re:`, escape it with a
 leading backslash: `\re:something`. Typing `field=value` for a field that exists
 (e.g. `service=api`) turns it into a chip instead of searching for the literal text —
 so clicking a chip and typing its `field=value` shorthand produce the same result.
@@ -315,7 +319,7 @@ timezone override, the table's column widths and which side panes are collapsed 
 round-trip through the URL hash (`#filter=...&q=...&range=...&cols=...&panes=...`),
 written a moment after you stop changing
 something (not on every keystroke, so typing doesn't flood your browser history) and
-applied automatically once you open the same URL and pick the same file again. Column
+applied automatically when you open the same URL while `looqlog` shows the same log. Column
 widths are `cols=<#>,<timestamp>,<level>` in `rem`, in that order; the message column is
 derived from the other three and so has no place in the grammar, and widths that are all
 at their defaults are left out of the link entirely. Collapsed panes are
@@ -338,56 +342,60 @@ retained line immediately, without reconnecting.
 
 ## Security
 
-The server sends `Content-Security-Policy: default-src 'self'` on every response.
-`script-src` also allows `'wasm-unsafe-eval'` for same-origin WASM compilation — a
-deliberate, narrow addition, not a loosened default. Inline styles are **not**
-permitted: `style-src` is `'self'`, with no `'unsafe-inline'`, because the
+The server sends `Content-Security-Policy: default-src 'self'; style-src 'self'` on
+every response — same-origin scripts, styles and the `/ws` connection, nothing more.
+Inline styles are **not** permitted: `style-src` is `'self'`, with no `'unsafe-inline'`, because the
 virtual-scrolled table positions its rows through rules in the page's own
 stylesheet rather than through `style` attributes.
 
-`/ws` (stdin mode's live-tail transport) is protected two ways:
+`/ws` (every query the page makes) and `/upload` (a file picked in the page) are
+protected two ways:
 
-- **Origin check.** A WebSocket upgrade whose `Origin` header doesn't match the
-  request's own `Host` is refused with `403` before any handshake completes and
-  before any stdin data can flow.
+- **Origin and Host check.** A request whose `Origin` doesn't match its own `Host`, or
+  whose `Host` doesn't name the address `looqlog` is bound to (a DNS-rebound name such
+  as `attacker.example`), is refused with `403` before any log data is sent and before
+  any uploaded byte is parsed.
 - **Per-process token handshake.** The served page embeds a random token generated
   once when `looqlog` starts. The page's own JS sends it as the first message on every
-  `/ws` connection (never in the URL or query string, so it can't end up in shell
-  history or a proxy log); a connection that doesn't present it within a few seconds
-  is closed without any data being sent.
+  `/ws` connection and in the `X-Looqlog-Token` header of an upload (never in the URL
+  or query string, so it can't end up in shell history or a proxy log); a connection
+  that doesn't present it within a few seconds is closed without any data being sent.
 
 **What this protects against, stated plainly so it isn't mistaken for more:** a page
 on a different origin — e.g. a malicious tab open in the same browser — cannot read
-the token (it can't fetch your `looqlog` page's HTML cross-origin) and so cannot open
-the stdin stream. It does **not** protect against another process on the same
+the token (it can't fetch your `looqlog` page's HTML cross-origin) and so cannot read
+the log or upload one. It does **not** protect against another process on the same
 machine, which can just fetch the page itself the same way a browser would. It does
 **not** add any protection to `--host 0.0.0.0` or any other non-loopback bind —
 anyone who can reach that host and port can fetch the page and then the token, same
-as a legitimate browser tab. That gap is accepted, not closed
+as a legitimate browser tab, and with it the file and the stdin stream. That gap is
+accepted, not closed
 ([ADR-0003](docs/adr/0003-bind-127-0-0-1-by-default.md)): binding beyond `127.0.0.1`
 always prints a mandatory warning naming exactly this.
 
 ## File size limits
 
-Parsing happens by holding every entry and its index in browser memory, so there's a
-practical ceiling well below the nominal 4GB a 32-bit address space suggests.
-Measured (not guessed — see `docs/devlog.md`'s `release-hardening` entry): the
-browser-side working set (`entries` + the time-index) grows at a strikingly
-consistent ~3.4x the raw file size. Two thresholds follow from that:
+The `looqlog` process holds every retained entry, its index and its raw line in memory.
+Measured (`cargo run -p looqlog-core --release --example mem_probe -- session 64`, see
+`docs/devlog.md`): retained memory is about 3.5x the file size for plain text, 7.3x for
+JSON Lines and 10.2x for logfmt. The limits follow from the worst of those:
 
-- **Above ~50MB**, opening a file shows a warning (continue/cancel) — parsing and
-  memory use both become noticeable past this point.
-- **Above 400MB**, looqlog refuses to start parsing at all and explains why, rather than
-  starting a parse that could fail partway through with an out-of-memory error you
-  can't interpret. Split the file (e.g. by time range) or filter it down first.
+- **Above 50 MB** a file is still opened, with a warning — from the command line it is
+  printed on the terminal and shown on the page, and an upload from the page asks to
+  continue or cancel first. Past this point parsing takes a while and memory use reaches
+  about half a gigabyte.
+- **Above 400 MB** looqlog refuses the file (up to ~4 GB of memory at the measured worst
+  case) and explains why, rather than starting a parse that could fail partway through.
+  Split the file (e.g. by time range) or filter it down first.
 
 ## Error states
 
 Every failure mode has a specific, persistent message instead of a blank screen, an
 infinite spinner, or a console-only error: an empty file, a file that looks binary
 (NUL bytes near the start — offers a "proceed anyway" override, since a log with one
-stray NUL byte is a real if rare case), a file the browser couldn't read, a WASM
-module that failed to load, and a format that parsed to zero entries (read distinctly
+stray NUL byte is a real if rare case), a file `looqlog` or the browser couldn't read
+(naming the path), an upload the backend rejected (with its reason), a lost connection
+to the `looqlog` process, and a format that parsed to zero entries (read distinctly
 from an empty file and from a filter matching nothing). Errors stay on screen until
 you dismiss them or open another file successfully — never a toast that fades on its
 own — and a failed second file never clears what the first one already loaded.
@@ -403,8 +411,7 @@ anywhere, so both appearances render fully with the network disabled.
 
 - **Named timezones aren't supported** — only UTC and fixed offsets. A timestamp
   written in `Europe/Belgrade` local time with no explicit offset is read as UTC. A
-  full IANA timezone database (`chrono-tz`) would very likely have blown the
-  `core.wasm` size budget the same way `regex` did (see `docs/devlog.md`).
+  full IANA timezone database (`chrono-tz`) has not been added.
 - **A multi-line event is grouped, not merged.** The lines of a stack trace or a
   pretty-printed JSON payload are linked into one collapsible row and counted once on
   the timeline, but each line is still its own entry underneath — and the keys nested

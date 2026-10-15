@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Deterministically generate the ~1MB JSON-Lines fixture used for the day-4 WASM
-parse benchmark (mvp-plan day 4, `browser-file-loading` spec "Parse throughput is
-measured, not assumed").
+"""Deterministically generate a ~1MB JSON-Lines fixture for manual runs against the
+binary (`looqlog /tmp/bench-1mb.jsonl`). Parse throughput itself is measured natively
+with `cargo bench -p looqlog-core` (`file-ingest` spec, ADR-0010); `benches/parse.rs`
+mirrors this generator's line shape.
 
 Not committed to the repository (a ~1MB data file is not something worth reviewing as
 text); regenerate it on demand. Deterministic (no timestamps, no randomness) so the

@@ -1,11 +1,12 @@
 # looqlog-core
 
-The log parsing core of [looqlog](https://crates.io/crates/looqlog): byte chunks in,
-structured entries and diagnostics out.
+The log parsing and query engine of [looqlog](https://crates.io/crates/looqlog): byte
+chunks in, structured entries and diagnostics out, plus a `Session` that indexes them and
+answers filter, search, window and timeline-bucket queries.
 
-Target-agnostic by design — no `wasm-bindgen`, no `web-sys`, no `std::fs`, and no clock
-— so the same crate backs both the browser (through a `wasm-bindgen` adapter) and native
-callers. CI enforces this with a dedicated job rather than a convention.
+Target-agnostic by design — no `wasm-bindgen`, no `web-sys`, no `std::fs`, no async and
+no clock — so the same crate backs the `looqlog` server and any other native caller. CI
+enforces this with a dedicated job rather than a convention.
 
 ```rust
 use looqlog_core::{Parser, TimeZonePolicy};
@@ -22,8 +23,8 @@ entries.extend(parser.finish());
 - **Loud about failure.** A malformed line is skipped with a reported diagnostic, never
   dropped silently; entries emitted plus lines skipped plus blank lines always equals
   the total line count.
-- **No `regex` dependency.** Hand-written byte scanners, because `regex` alone cost
-  roughly three times the whole WebAssembly size budget.
+- **Native query engine.** A time-ordered index, chain-aware filters, substring and
+  `re:` search (Rust `regex` syntax) and timeline buckets, with per-client views.
 
 Full documentation lives in the
 [repository](https://github.com/yushman/looqlog#readme).

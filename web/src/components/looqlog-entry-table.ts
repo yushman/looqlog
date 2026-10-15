@@ -1,13 +1,12 @@
 // Virtual-scrolled entry table (`entry-table` spec, design.md D2/D6/D7). Renders
 // only the rows in and near the viewport regardless of dataset size (fixed row
-// height, D6), reflects the shell-owned active range (D7), and survives live
-// growth/eviction by anchoring the visible window to a stable row identity
-// (`EntryDto.ordinal`, D2) across each `refresh()` rather than to a raw scroll
-// offset that eviction would silently invalidate.
+// height, D6), and survives live growth/eviction by anchoring the visible window to
+// a stable row identity (`RowDto.ordinal`, D2) across each `refresh()` rather than to
+// a raw scroll offset that eviction would silently invalidate.
 //
-// Replaces the provisional table from `browser-app-shell` (task 3.8): that one
-// rendered every entry into the DOM up to a 500-row cap; this one is bounded by
-// the viewport, not the dataset, at any size.
+// Rows come from the backend (ADR-0010): the table asks the view session for windows
+// of the current, chain-collapsed result set and keeps only a two-screen overscan
+// cache around the viewport — the browser never holds the log.
 //
 // The detail view is no longer part of this component (`frontend-three-pane-layout`
 // D6): the table holds the selection and emits it as `selection-change`, and the
@@ -21,10 +20,8 @@ import {
   type ColumnWidths,
   type ResizableColumn,
 } from "../column-widths";
-import type { EntryIndex } from "../entry-index";
-import { findMatchRanges, type CompiledQuery } from "../predicate";
-import type { TimeRange } from "../time-range";
-import type { EntryDto } from "../wasm-types";
+import type { RowDto } from "../query-types";
+import type { ViewSession } from "../view-session";
 
 /** Uniform row height in CSS pixels — what makes virtual scrolling arithmetic
  * (index * height) rather than a measurement pass (D6).
@@ -44,34 +41,19 @@ const OVERSCAN_ROWS = 8;
 const MESSAGE_TRUNCATE_CHARS = 300;
 
 export class LooqlogEntryTable extends HTMLElement {
-  private index: EntryIndex | null = null;
-  private activeRange: TimeRange | null = null;
-  private displayed: EntryDto[] = [];
-  /** `displayed` minus the members of collapsed chains — the rows virtual scrolling
-   * actually addresses (`entry-table` spec, "A continuation chain renders as one
-   * collapsible group"). Every row is still one `ROW_HEIGHT`, so the arithmetic that
-   * makes this a virtual scroller rather than a measurement pass is untouched. */
-  private rows: EntryDto[] = [];
-  /** Chain root ordinal → total lines in the chain (root included), for the roots
-   * present in `displayed`. Absent for an entry that roots no visible chain. */
-  private chainSizes = new Map<number, number>();
-  /** Member ordinal → its root, for members whose root is also in `displayed`. A
-   * member without one — a chain cut by a time range, or orphaned by live-tail
-   * eviction — renders as an ordinary standalone row. */
-  private chainOf = new Map<number, number>();
-  /** Roots the user has expanded. Chains start collapsed, so a file full of stack
-   * traces opens showing events rather than frames. Held on the component, so it
-   * survives the row recycling in `renderVisibleRows` and every `refresh()`. */
-  private expandedChains = new Set<number>();
+  private session: ViewSession | null = null;
+  /** Visible-row index → row, for the window last fetched around the viewport. */
+  private cache = new Map<number, RowDto>();
+  /** Bumped per fetch; a reply for an older fetch is dropped. */
+  private fetchSeq = 0;
+  private fetchFrame: number | null = null;
+  private pendingFetchIndex = 0;
   private selectedOrdinal: number | null = null;
   private evictionBannerVisible = false;
-  /** For highlighting only (`search` spec, "Match highlighting") — filtering
-   * itself already happened inside `EntryIndex` via its predicate (D2); this is
-   * never consulted to decide whether a row is shown, only how it's drawn. */
-  private compiledQuery: CompiledQuery = { kind: "none" };
 
   private summaryEl!: HTMLParagraphElement;
   private evictionEl!: HTMLParagraphElement;
+  private evictedMarkerEl!: HTMLParagraphElement;
   private headerEl!: HTMLDivElement;
   private viewportEl!: HTMLDivElement;
   private rowsEl!: HTMLDivElement;
@@ -116,6 +98,7 @@ export class LooqlogEntryTable extends HTMLElement {
           <p class="entry-table-summary" id="table-summary"></p>
           <button type="button" class="col-reset-all" id="reset-columns" hidden>Reset columns</button>
         </div>
+        <p class="provisional-note eviction-marker" id="evicted-marker" hidden></p>
         <p class="provisional-note eviction-banner" id="eviction-banner" hidden>
           Earlier entries you were viewing are no longer retained (evicted at
           <code>--max-lines</code>) — jumped to the oldest entry still available.
@@ -135,6 +118,7 @@ export class LooqlogEntryTable extends HTMLElement {
     `;
     this.summaryEl = this.querySelector("#table-summary") as HTMLParagraphElement;
     this.evictionEl = this.querySelector("#eviction-banner") as HTMLParagraphElement;
+    this.evictedMarkerEl = this.querySelector("#evicted-marker") as HTMLParagraphElement;
     this.headerEl = this.querySelector("#header") as HTMLDivElement;
     this.viewportEl = this.querySelector("#viewport") as HTMLDivElement;
     this.rowsEl = this.querySelector("#rows") as HTMLDivElement;
@@ -173,6 +157,10 @@ export class LooqlogEntryTable extends HTMLElement {
 
   disconnectedCallback(): void {
     window.removeEventListener("resize", this.handleResize);
+    if (this.fetchFrame !== null) {
+      cancelAnimationFrame(this.fetchFrame);
+      this.fetchFrame = null;
+    }
     // The three rules live in a stylesheet this component does not own, so it has
     // to take them back out again: a remount inserts a fresh set under a new
     // scope, and without this they would accumulate in `/assets/index.css` for the
@@ -370,82 +358,73 @@ export class LooqlogEntryTable extends HTMLElement {
     this.dispatchEvent(new CustomEvent<number | null>("selection-change", { detail: this.selectedOrdinal }));
   }
 
-  /** A new dataset (new file, or a fresh stream). Resets scroll and selection. */
-  setIndex(index: EntryIndex): void {
-    this.index = index;
+  /** A new source (or none). Resets scroll and selection. */
+  setSource(session: ViewSession | null): void {
+    this.session = session;
     this.selectedOrdinal = null;
-    this.expandedChains.clear(); // a new file's ordinals mean nothing to the old set
-    this.recomputeDisplayed();
-    this.viewportEl.scrollTop = 0;
-    this.renderVisibleRows();
+    this.evictionBannerVisible = false;
+    this.evictionEl.hidden = true;
+    this.reload();
     this.emitSelection();
   }
 
-  /** The shell narrowed or cleared the active range (D7). Resets scroll — this is
-   * a new view, not a continuation of the old one. */
-  setActiveRange(range: TimeRange | null): void {
-    this.activeRange = range;
-    this.recomputeDisplayed();
+  /** The view changed (filters, search, range, or a re-parse): rows are re-fetched
+   * from the top. Scroll from the old view has no meaning in the new one. */
+  reload(): void {
+    this.cache.clear();
     this.viewportEl.scrollTop = 0;
+    this.renderSummary();
     this.renderVisibleRows();
+    void this.fetchAround(0);
   }
 
-  /** The compiled search query, for match highlighting only (`search` spec) — set
-   * independently of filtering, which already happened via `EntryIndex`'s
-   * predicate before `refreshFilters`/`refresh` is called. */
-  setQuery(compiled: CompiledQuery): void {
-    this.compiledQuery = compiled;
-    this.expandChainsMatchingQuery();
-    this.renderVisibleRows();
-  }
-
-  /** The shell's predicate (chips/search, `filtering-and-search`) changed. Same
-   * "new view" semantics as `setActiveRange`: this reflects `EntryIndex` having
-   * already been re-filtered (`EntryIndex.setPredicate`), so the scroll position
-   * from before the filter change has no guaranteed meaning here. */
-  refreshFilters(): void {
-    this.recomputeDisplayed();
-    this.viewportEl.scrollTop = 0;
-    this.renderVisibleRows();
-  }
-
-  /** Called after live append/eviction (design.md D8-adjacent: the caller
-   * throttles the call rate). Preserves the row the user was looking at by
-   * identity (`ordinal`), not by raw scroll offset, so growth at the tail leaves
-   * a paused user's view untouched and front-eviction adjusts cleanly instead of
-   * silently showing the wrong rows. */
+  /** Called after live growth/eviction (the caller throttles the call rate). Keeps
+   * the row the user was looking at by identity (`ordinal`), not by scroll offset:
+   * growth at the tail leaves a paused view untouched, and front-eviction moves it to
+   * where that entry is now — or to the nearest survivor, with the banner saying so. */
   refresh(): void {
-    if (!this.index) {
+    const session = this.session;
+    if (!session) {
       return;
     }
-    const oldRows = this.rows;
+    this.renderSummary();
     const scrollTop = this.viewportEl.scrollTop;
     const topIdx = Math.floor(scrollTop / ROW_HEIGHT);
-    const anchor = oldRows[topIdx];
-    const anchorOffsetPx = scrollTop - topIdx * ROW_HEIGHT;
-
-    this.recomputeDisplayed();
-
-    if (anchor) {
-      const newIdx = lowerBoundOrdinal(this.rows, anchor.ordinal);
-      const found = this.rows[newIdx]?.ordinal === anchor.ordinal;
-      if (!found && this.rows.length > 0 && (this.rows[0]?.ordinal ?? 0) > anchor.ordinal) {
-        // The row the user was anchored to (or rows above it) were evicted out
-        // from under them — jumping to the nearest survivor is the "adjusts
-        // cleanly" half of the requirement; the banner is the "indicates lost
-        // history" half.
-        this.evictionBannerVisible = true;
-        this.evictionEl.hidden = false;
-      }
-      const clampedIdx = Math.min(newIdx, Math.max(0, this.rows.length - 1));
-      this.viewportEl.scrollTop = clampedIdx * ROW_HEIGHT + (found ? anchorOffsetPx : 0);
+    const anchor = this.cache.get(topIdx);
+    if (!anchor || topIdx === 0) {
+      this.cache.clear();
+      this.renderVisibleRows();
+      void this.fetchAround(topIdx);
+      return;
     }
+    const offsetPx = scrollTop - topIdx * ROW_HEIGHT;
+    const limit = this.screenRows() * 3;
+    const seq = ++this.fetchSeq;
+    void session
+      .window(0, limit, anchor.ordinal)
+      .then((reply) => {
+        if (!reply || seq !== this.fetchSeq) {
+          return;
+        }
+        const found = reply.rows[0]?.ordinal === anchor.ordinal;
+        if (!found && (reply.rows[0]?.ordinal ?? Infinity) > anchor.ordinal && reply.offset === 0) {
+          this.evictionBannerVisible = true;
+          this.evictionEl.hidden = false;
+        }
+        this.storeRows(reply.offset, reply.rows);
+        this.viewportEl.scrollTop = reply.offset * ROW_HEIGHT + (found ? offsetPx : 0);
+        this.renderVisibleRows();
+      })
+      .catch(() => undefined);
+  }
 
-    if (this.evictionBannerVisible) {
-      this.evictionEl.hidden = false;
-    }
-
-    this.renderVisibleRows();
+  /** Total lines evicted from retention so far; shown above the first row. */
+  setEvicted(count: number): void {
+    this.evictedMarkerEl.hidden = count === 0;
+    this.evictedMarkerEl.textContent =
+      count === 0
+        ? ""
+        : `${count} oldest line${count === 1 ? "" : "s"} evicted (--max-lines) — earlier entries are no longer retained.`;
   }
 
   /** Distance in px from the bottom of the scrollable viewport. Exposed for
@@ -458,106 +437,95 @@ export class LooqlogEntryTable extends HTMLElement {
   }
 
   /** Scrolls to the newest row. Used by a "follow" caller after each `refresh()`;
-   * this component itself never auto-follows (design.md D6/`entry-table` spec —
-   * "without losing the user's scroll position" is the default, not following). */
+   * this component itself never auto-follows. */
   scrollToBottom(): void {
     this.viewportEl.scrollTop = this.viewportEl.scrollHeight;
     this.renderVisibleRows();
   }
 
-  private recomputeDisplayed(): void {
-    if (!this.index) {
-      this.displayed = [];
-    } else if (this.activeRange) {
-      this.displayed = this.index.queryRange(this.activeRange.startMs, this.activeRange.endMs).entries;
-    } else {
-      this.displayed = this.index.entriesInInputOrder();
-    }
-    this.recomputeRows();
-    this.renderSummary();
+  private get rowCount(): number {
+    return this.session?.counts.rowCount ?? 0;
   }
 
-  /** Groups `displayed` into chains and drops the members of collapsed ones. Derived
-   * from `displayed` rather than from the index on purpose: a member whose root the
-   * active range or eviction removed is then, by construction, a row with no group —
-   * there is no lookup left to fail. */
-  private recomputeRows(): void {
-    this.chainSizes.clear();
-    this.chainOf.clear();
-    const present = new Set(this.displayed.map((e) => e.ordinal));
-    for (const entry of this.displayed) {
-      const root = entry.continuationOf;
-      if (root === null || !present.has(root)) {
-        continue;
-      }
-      this.chainOf.set(entry.ordinal, root);
-      this.chainSizes.set(root, (this.chainSizes.get(root) ?? 1) + 1);
+  private screenRows(): number {
+    return Math.ceil((this.viewportEl.clientHeight || ROW_HEIGHT * 20) / ROW_HEIGHT);
+  }
+
+  /** Fetches a window two screens either side of `index` — the overscan cache. The
+   * browser never holds more rows than that. */
+  private async fetchAround(index: number): Promise<void> {
+    const session = this.session;
+    if (!session) {
+      return;
     }
-    // Expansion state is kept for chains that are no longer visible: a filter change
-    // that hides a chain and a later one that brings it back should not silently
-    // re-collapse it.
-    this.rows = this.displayed.filter((entry) => {
-      const root = this.chainOf.get(entry.ordinal);
-      return root === undefined || this.expandedChains.has(root);
-    });
+    const screen = this.screenRows();
+    const offset = Math.max(0, index - screen * 2);
+    const seq = ++this.fetchSeq;
+    try {
+      const reply = await session.window(offset, screen * 5);
+      if (!reply || seq !== this.fetchSeq) {
+        return;
+      }
+      this.storeRows(reply.offset, reply.rows);
+      this.renderSummary();
+      this.renderVisibleRows();
+    } catch {
+      // A lost connection is reported by the shell; the rows simply stay as they were.
+    }
+  }
+
+  private storeRows(offset: number, rows: readonly RowDto[]): void {
+    this.cache.clear();
+    rows.forEach((row, i) => this.cache.set(offset + i, row));
   }
 
   private renderSummary(): void {
-    if (!this.index) {
+    const session = this.session;
+    if (!session) {
       this.summaryEl.textContent = "";
       return;
     }
-    const total = this.index.totalCount;
-    const shown = this.displayed.length;
-    const filtered = this.index.hasActivePredicate;
+    const { total, matched, timestamplessExcluded } = session.counts;
+    const filtered = session.hasFilters;
+    const range = session.state.range;
     let text: string;
-    if (!this.activeRange) {
+    if (!range) {
       if (total === 0) {
         text = "No entries.";
-      } else if (shown === 0 && filtered) {
-        // `filtering` spec, "A filter that matches nothing is distinguishable" —
-        // reads differently from "No entries." above, which means an empty file.
+      } else if (matched === 0 && filtered) {
+        // `filtering` spec, "A filter that matches nothing is distinguishable".
         text = `Filters and search exclude all ${total} entries.`;
       } else {
         text = filtered
-          ? `Showing ${shown} of ${total} entries matching the active filters.`
-          : `Showing all ${shown} of ${total} entries.`;
+          ? `Showing ${matched} of ${total} entries matching the active filters.`
+          : `Showing all ${matched} of ${total} entries.`;
       }
     } else {
       text = filtered
-        ? `Showing ${shown} of ${total} entries matching the active filters, in the selected range.`
-        : `Showing ${shown} of ${total} entries in the selected range.`;
-      const timestamplessTotal = this.index.timestamplessCount;
-      if (timestamplessTotal > 0) {
-        text += ` (${timestamplessTotal} entr${timestamplessTotal === 1 ? "y has" : "ies have"} no ` +
-          `timestamp and ${timestamplessTotal === 1 ? "is" : "are"} excluded from any time range.)`;
+        ? `Showing ${matched} of ${total} entries matching the active filters, in the selected range.`
+        : `Showing ${matched} of ${total} entries in the selected range.`;
+      if (timestamplessExcluded > 0) {
+        text += ` (${timestamplessExcluded} entr${timestamplessExcluded === 1 ? "y has" : "ies have"} no ` +
+          `timestamp and ${timestamplessExcluded === 1 ? "is" : "are"} excluded from any time range.)`;
       }
     }
     this.summaryEl.textContent = text;
   }
 
   private renderVisibleRows(): void {
-    const total = this.rows.length;
+    const total = this.rowCount;
     const clientHeight = this.viewportEl.clientHeight || ROW_HEIGHT * 20;
     const scrollTop = this.viewportEl.scrollTop;
     const firstIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS);
     const visibleCount = Math.ceil(clientHeight / ROW_HEIGHT) + OVERSCAN_ROWS * 2;
     const lastIdxExclusive = Math.min(total, firstIdx + visibleCount);
 
-    // Two rule mutations, not two `style` attribute writes (design D3/D4): the
-    // existing `CSSStyleDeclaration` is assigned in place, which is what keeps this
-    // off the "re-parse the whole stylesheet every frame" path `replaceSync`/
-    // `textContent =` would put it on. Measured against the recorded 50k baseline —
-    // see the change's tasks.md 1.1/5.1.
+    // Two rule mutations, not two `style` attribute writes (design D3/D4).
     this.spacerRule.style.height = `${total * ROW_HEIGHT}px`;
     this.rowsRule.style.transform = `translateY(${firstIdx * ROW_HEIGHT}px)`;
 
-    // Rows are reused, not rebuilt. Replacing `rowsEl.innerHTML` on every render
-    // detached whatever the user was pressing on: under a live stream the row went
-    // away between mousedown and mouseup, the browser never synthesised a `click`,
-    // and selecting an entry silently did nothing (the same failure the filter rail
-    // had). A row whose content key is unchanged is left completely untouched, so
-    // the node under the pointer survives the update.
+    // Rows are reused, not rebuilt: a row whose content key is unchanged is left
+    // untouched, so the node under the pointer survives a live update.
     const count = lastIdxExclusive - firstIdx;
     while (this.rowsEl.children.length > count) {
       this.rowsEl.lastElementChild!.remove();
@@ -565,24 +533,47 @@ export class LooqlogEntryTable extends HTMLElement {
     while (this.rowsEl.children.length < count) {
       this.rowsEl.appendChild(createRowElement());
     }
-    const queryKey = compiledQueryKey(this.compiledQuery);
+    let missing = false;
     for (let j = 0; j < count; j++) {
-      const entry = this.rows[firstIdx + j]!; // firstIdx + j < lastIdxExclusive <= total
       const el = this.rowsEl.children[j] as HTMLElement;
-      const selected = entry.ordinal === this.selectedOrdinal;
-      const chainSize = this.chainSizes.get(entry.ordinal) ?? 0;
-      const expanded = chainSize > 0 && this.expandedChains.has(entry.ordinal);
-      const isMember = this.chainOf.has(entry.ordinal);
-      const key = `${entry.ordinal}|${selected ? 1 : 0}|${queryKey}|${chainSize}|${expanded ? 1 : 0}|${isMember ? 1 : 0}`;
+      const row = this.cache.get(firstIdx + j);
+      if (!row) {
+        missing = true;
+        if (el.dataset.key !== "loading") {
+          el.dataset.key = "loading";
+          delete el.dataset.ordinal;
+          el.classList.remove("selected", "chain-member");
+          el.innerHTML = `<span class="col-ordinal"></span><span class="col-timestamp"></span><span class="col-level"></span><span class="col-message absent">…</span>`;
+        }
+        continue;
+      }
+      const selected = row.ordinal === this.selectedOrdinal;
+      const ranges = row.matchRanges.map((r) => r.join("-")).join(",");
+      const key = `${row.ordinal}|${selected ? 1 : 0}|${ranges}|${row.chainSize}|${row.expanded ? 1 : 0}|${row.chainMember ? 1 : 0}`;
       if (el.dataset.key === key) {
         continue;
       }
       el.dataset.key = key;
-      el.dataset.ordinal = String(entry.ordinal);
+      el.dataset.ordinal = String(row.ordinal);
       el.classList.toggle("selected", selected);
-      el.classList.toggle("chain-member", isMember);
-      el.innerHTML = renderRowCellsHtml(entry, this.compiledQuery, chainSize, expanded);
+      el.classList.toggle("chain-member", row.chainMember);
+      el.innerHTML = renderRowCellsHtml(row);
     }
+    if (missing && this.session) {
+      this.scheduleFetch(Math.floor(scrollTop / ROW_HEIGHT));
+    }
+  }
+
+  /** One fetch per frame at most while scrolling through rows not yet cached. */
+  private scheduleFetch(index: number): void {
+    this.pendingFetchIndex = index;
+    if (this.fetchFrame !== null) {
+      return;
+    }
+    this.fetchFrame = requestAnimationFrame(() => {
+      this.fetchFrame = null;
+      void this.fetchAround(this.pendingFetchIndex);
+    });
   }
 
   private handleRowClick(event: Event): void {
@@ -591,7 +582,7 @@ export class LooqlogEntryTable extends HTMLElement {
     const toggle = (event.target as HTMLElement).closest<HTMLElement>(".chain-toggle");
     if (toggle) {
       event.stopPropagation();
-      this.toggleChain(Number(toggle.dataset.chain));
+      void this.toggleChain(Number(toggle.dataset.chain));
       return;
     }
     const rowEl = (event.target as HTMLElement).closest<HTMLElement>("[data-ordinal]");
@@ -604,44 +595,37 @@ export class LooqlogEntryTable extends HTMLElement {
     this.emitSelection();
   }
 
-  /** Expands or collapses the chain rooted at `rootOrdinal`, keeping the scroll
-   * anchored on that root: the rows below it move, and a user who opened a
-   * sixty-frame trace should still be looking at its first line. */
-  private toggleChain(rootOrdinal: number): void {
-    if (!this.chainSizes.has(rootOrdinal)) {
+  /** Expands or collapses the chain rooted at `rootOrdinal` on the backend, keeping
+   * that root where it was on screen: the rows below it move, and a user who opened
+   * a sixty-frame trace should still be looking at its first line. */
+  private async toggleChain(rootOrdinal: number): Promise<void> {
+    const session = this.session;
+    if (!session) {
       return;
     }
-    if (this.expandedChains.has(rootOrdinal)) {
-      this.expandedChains.delete(rootOrdinal);
-    } else {
-      this.expandedChains.add(rootOrdinal);
-    }
-    const offsetPx = this.viewportEl.scrollTop - this.rows.findIndex((e) => e.ordinal === rootOrdinal) * ROW_HEIGHT;
-    this.recomputeRows();
-    const at = this.rows.findIndex((e) => e.ordinal === rootOrdinal);
-    if (at >= 0) {
-      this.viewportEl.scrollTop = Math.max(0, at * ROW_HEIGHT + offsetPx);
-    }
-    this.renderVisibleRows();
-  }
-
-  /** Expands every visible chain with a member the query matched, so the highlighted
-   * frame is actually on screen (`entry-table` spec, "Search expands the chain it
-   * matched"). Collapsing again is the user's call — this never re-collapses. */
-  private expandChainsMatchingQuery(): void {
-    if (this.compiledQuery.kind === "none") {
-      return;
-    }
-    for (const entry of this.displayed) {
-      const root = this.chainOf.get(entry.ordinal);
-      if (root === undefined || this.expandedChains.has(root)) {
-        continue;
-      }
-      if (findMatchRanges(entry.message, this.compiledQuery).length > 0) {
-        this.expandedChains.add(root);
+    let rootIdx = -1;
+    for (const [idx, row] of this.cache) {
+      if (row.ordinal === rootOrdinal) {
+        rootIdx = idx;
       }
     }
-    this.recomputeRows();
+    const offsetPx = this.viewportEl.scrollTop - rootIdx * ROW_HEIGHT;
+    try {
+      await session.toggleChain(rootOrdinal);
+      const seq = ++this.fetchSeq;
+      const reply = await session.window(0, this.screenRows() * 3, rootOrdinal);
+      if (!reply || seq !== this.fetchSeq) {
+        return;
+      }
+      this.storeRows(reply.offset, reply.rows);
+      this.renderVisibleRows();
+      if (rootIdx >= 0) {
+        this.viewportEl.scrollTop = Math.max(0, reply.offset * ROW_HEIGHT + offsetPx);
+      }
+      this.renderVisibleRows();
+    } catch {
+      // Reported by the shell's connection indicator.
+    }
   }
 }
 
@@ -720,26 +704,9 @@ function createRowElement(): HTMLElement {
   return el;
 }
 
-/** Identifies what a row's cells were rendered from: the entry, whether it is
- * selected, and the query the highlighting came from. Equal keys mean the rendered
- * output would be identical, so the row can be left alone. */
-function compiledQueryKey(compiled: CompiledQuery): string {
-  switch (compiled.kind) {
-    case "none":
-      return "none";
-    case "substring":
-      return `sub:${compiled.needle}`;
-    case "regex":
-      return `re:${compiled.source}`;
-  }
-}
-
-function renderRowCellsHtml(
-  entry: EntryDto,
-  compiled: CompiledQuery,
-  chainSize: number,
-  expanded: boolean,
-): string {
+function renderRowCellsHtml(entry: RowDto): string {
+  const chainSize = entry.chainSize;
+  const expanded = entry.expanded;
   const timestampHtml = entry.timestamp
     ? `<span title="${escapeHtml(entry.timestamp)}">${escapeHtml(rowTimestamp(entry.timestamp))}</span>`
     // An em dash, not the words "no timestamp": the marker has to fit a column
@@ -761,7 +728,7 @@ function renderRowCellsHtml(
   const messageShown = truncated ? `${entry.message.slice(0, MESSAGE_TRUNCATE_CHARS)}…` : entry.message;
   // Highlighting runs on the truncated text (`search` spec: "within the
   // truncated visible text") so ranges line up with what's actually rendered.
-  const messageHtml = highlightHtml(messageShown, compiled);
+  const messageHtml = highlightHtml(messageShown, entry.matchRanges);
   // A chain root carries the control and the line count; a member carries neither and
   // is set apart by the row's `chain-member` class alone (`entry-table` spec).
   const toggleHtml = chainSize > 0 ? chainToggleHtml(entry.ordinal, chainSize, expanded) : "";
@@ -792,22 +759,6 @@ function chainToggleHtml(rootOrdinal: number, chainSize: number, expanded: boole
   );
 }
 
-/** First index in `displayed` (sorted ascending by ordinal — input order, D2)
- * whose ordinal is >= `ordinal`. */
-function lowerBoundOrdinal(displayed: readonly EntryDto[], ordinal: number): number {
-  let lo = 0;
-  let hi = displayed.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
-    if (displayed[mid]!.ordinal < ordinal) {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
-  }
-  return lo;
-}
-
 /** Drops the zone suffix a row does not need: `Entry::timestamp` is a
  * `DateTime<Utc>` in `looqlog-core`, so every value the parser emits ends in `+00:00`
  * (or `Z`) and the column header already says UTC — six characters repeated on
@@ -826,23 +777,20 @@ function escapeHtml(input: string): string {
     .replace(/>/g, "&gt;");
 }
 
-/** Escapes `text` and wraps every range `findMatchRanges` reports in a styled
- * `<span class="hl">` (`search` spec, "Match highlighting"). A plain `<span>`
- * rather than the semantically-closer `<mark>` deliberately (task 7.3/7.4,
- * `docs/devlog.md`): measured in a real browser at 10k entries, writing 36
- * `<mark>`-containing rows via `innerHTML` cost ~19ms avg versus ~5ms for the
- * identical content in `<span class="hl">` — `<mark>` alone, isolated from every
- * other variable, was responsible for most of one filter-change's latency budget.
- * Escaping happens per-segment so a `<`/`&` inside a matched range can't break out
- * of the span it's wrapped in. */
-function highlightHtml(text: string, compiled: CompiledQuery): string {
-  const ranges = findMatchRanges(text, compiled);
-  if (ranges.length === 0) {
-    return escapeHtml(text);
-  }
+/** Escapes `text` and wraps every range the backend reported (`search` spec, "Match
+ * highlighting") in a styled `<span class="hl">` — a plain span rather than `<mark>`,
+ * which measured several times slower to write via `innerHTML` (`docs/devlog.md`).
+ * Ranges past the end of `text` (it may be truncated) are clipped. Escaping happens
+ * per segment so a `<`/`&` inside a match cannot break out of its span. */
+export function highlightHtml(text: string, ranges: ReadonlyArray<readonly [number, number]>): string {
   const parts: string[] = [];
   let cursor = 0;
-  for (const [start, end] of ranges) {
+  for (const [rawStart, rawEnd] of ranges) {
+    const start = Math.max(cursor, Math.min(rawStart, text.length));
+    const end = Math.min(rawEnd, text.length);
+    if (end <= start) {
+      continue;
+    }
     parts.push(escapeHtml(text.slice(cursor, start)));
     parts.push(`<span class="hl">${escapeHtml(text.slice(start, end))}</span>`);
     cursor = end;

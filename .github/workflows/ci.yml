@@ -35,7 +35,7 @@ jobs:
       - run: cargo test --workspace
 
   # packaging spec, "Node-less build": cargo build/install must not need a JS
-  # toolchain. This job never installs Node/npm/wasm-pack — only the committed
+  # toolchain. This job never installs Node/npm — only the committed
   # assets/ (ADR-0008) are used.
   build-no-node:
     runs-on: ubuntu-latest
@@ -45,9 +45,9 @@ jobs:
       - run: cargo build --release
       - run: cargo package --list -p looqlog
 
-  # ADR-0005: looqlog-core must stay usable by a future native (MCP) adapter as well
-  # as the wasm adapter, so it must never depend on wasm-bindgen/web-sys, and must
-  # never touch the filesystem itself (log-parsing-core task 2.4).
+  # ADR-0005: looqlog-core must stay target-agnostic — reusable by the server and a
+  # future native (MCP) adapter — so it must never depend on wasm-bindgen/web-sys, and
+  # must never touch the filesystem itself (log-parsing-core task 2.4).
   adr-0005-boundary:
     runs-on: ubuntu-latest
     steps:
@@ -71,45 +71,19 @@ jobs:
           fi
 
   # packaging spec, "Vendored artifacts are verifiably current": rebuild
-  # assets/ from source and fail if the committed copy has drifted (ADR-0008 D2).
-  # Runs on macOS, unlike every other job here, and deliberately so: this job diffs
-  # a fresh build against the committed artifacts byte-for-byte, and rustc does not
-  # produce byte-identical wasm across host operating systems. With rustc, binaryen
-  # and Cargo.lock all identical, an arm64-macOS build and an x86_64-Linux build of
-  # the same source still differed by 12 bytes — so a Linux runner would report
-  # "stale" forever while nothing was stale. The artifacts are built and committed
-  # from arm64 macOS; the checker has to match that. If that ever stops being true,
-  # this job's platform moves with it.
+  # assets/ (JS bundle and stylesheet only — no WebAssembly since ADR-0010) from
+  # source and fail if the committed copy has drifted (ADR-0008 D2). The artifacts are
+  # built and committed from arm64 macOS, so the checker runs there too.
   frontend-artifact-staleness:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
-      # Pinned: rustc is an input to the diffed bytes, and this is the only job
-      # where that matters — `fmt`/`clippy`/`test`/`build-no-node`/`adr-0005-boundary`
-      # stay on @stable so a new release still turns those red instead of silently
-      # doing nothing. The other copy of this number is `EXPECTED_RUSTC` in
-      # scripts/build-frontend.sh.
-      - uses: dtolnay/rust-toolchain@1.98.0
-        with:
-          targets: wasm32-unknown-unknown
+      # Pinned: Node drives Vite, whose output is diffed byte-for-byte. The other copy
+      # of this number is `EXPECTED_NODE_MAJOR` in scripts/build-frontend.sh; Vite
+      # itself is pinned exactly in web/package.json.
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-      # Pinned for the same reason as rustc above: wasm-pack's own version affects
-      # the bytes it produces, and an unpinned `npm install -g wasm-pack` tracks
-      # whatever released most recently.
-      - name: Install wasm-pack
-        run: npm install -g wasm-pack@0.15.0
-      # Pinned: wasm-opt is part of the artifact, so an unpinned binaryen makes the
-      # rebuilt core.wasm differ from the committed one with no source change.
-      # Without this, wasm-pack downloads its own copy — which also failed
-      # intermittently, taking the whole job down with it.
-      - name: Install binaryen (wasm-opt)
-        run: |
-          V=version_132
-          curl -sSL "https://github.com/WebAssembly/binaryen/releases/download/${V}/binaryen-${V}-arm64-macos.tar.gz" \
-            | tar xz
-          echo "$PWD/binaryen-${V}/bin" >> "$GITHUB_PATH"
       - name: Rebuild frontend artifacts
         run: |
           set +e
@@ -144,10 +118,9 @@ jobs:
           fi
       # The error annotations above describe the drift but don't keep the bytes; this
       # step does. The committed side is always recoverable from git, but the rebuilt
-      # side exists only inside this runner — without this, a failure like the
-      # unexplained 216,854-byte core.wasm drift (docs/devlog.md) is rebuilt over the
-      # moment someone reruns the job, losing the only evidence of what actually
-      # changed. Separate step because the diff step above exits non-zero on drift.
+      # side exists only inside this runner — without this, an unexplained drift is
+      # rebuilt over the moment someone reruns the job, losing the only evidence of
+      # what actually changed. Separate step because the diff step above exits non-zero on drift.
       - name: Upload rebuilt assets on drift
         if: failure()
         uses: actions/upload-artifact@v4
@@ -155,7 +128,7 @@ jobs:
           name: frontend-assets-${{ github.run_id }}
           path: crates/looqlog/assets/
 
-  # app-shell / wasm-bridge specs: strict TypeScript build and type check, wired
+  # app-shell / query-api specs: strict TypeScript build and type check, wired
   # into CI so a type error blocks the build (browser-app-shell task 1.2).
   frontend-typecheck-and-build:
     runs-on: ubuntu-latest
@@ -171,7 +144,7 @@ jobs:
       - working-directory: web
         run: npm run build
 
-  # wasm-bridge spec, "Type check catches a shape change" (task 2.2): a deliberate
+  # query-api: "Type check catches a shape change" (task 2.2): a deliberate
   # field rename in the hand-written TS mirror, with a usage site left stale,
   # proves `tsc --noEmit` actually fails instead of silently compiling. See
   # web/scripts/verify-rename-check.sh for what this does and does not prove.

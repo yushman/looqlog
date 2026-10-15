@@ -3317,6 +3317,83 @@ workspace version would have published a 0.2.1 binary that resolves 0.2.0 core f
 crates.io — shipping the exact parser this release exists to fix. Caught before tagging,
 but nothing would have caught it after.
 
+## 2026-10-15 — `backend-query-engine`: the engine moves out of the browser
+
+ADR-0010 supersedes ADR-0002 and ADR-0007: `looqlog-core` now owns the index, filters,
+search, chain matching and timeline buckets behind a `Session` (data) and per-connection
+`View`s (query state), and the browser is a thin client over `/ws`.
+
+**Benchmarks** (`cargo bench -p looqlog-core`, Apple Silicon laptop, release profile):
+
+| what | command | result |
+|---|---|---|
+| session ingest, JSON Lines, 1 MB in 64 KiB chunks | `--bench session` `session_ingest_1mb/json` | 16.65 ms → **57.3 MiB/s** (~17 ms/MB) |
+| session ingest, logfmt | `session_ingest_1mb/logfmt` | 21.56 ms → **44.2 MiB/s** |
+| session ingest, plain text | `session_ingest_1mb/plain` | 10.27 ms → **92.8 MiB/s** |
+| re-filter `level=ERROR` + first window, 10k entries | `refilter/level_error/10000` | **0.13 ms** |
+| re-filter `re:slow.*detected` + first window, 10k | `refilter/regex/10000` | **0.43 ms** |
+| re-filter `level=ERROR`, 1M entries | `refilter/level_error/1000000` | **10.9 ms** |
+| re-filter regex, 1M entries | `refilter/regex/1000000` | **66.4 ms** |
+
+Session ingest includes parsing, index build and raw-line retention, and sits far under
+the TDR §11 <200 ms/MB target for every format. The pre-existing `--bench parse` numbers
+(79 ms/MB JSON, 99 logfmt, 121 plain) are slower than the session's because that bench
+feeds the whole megabyte as one chunk, and `Parser::feed` drains its pending buffer one
+line at a time — memmove cost grows with chunk size. The server reads in 64 KiB chunks,
+which is what the session bench measures; the parser quirk is left for a later change.
+
+The 10k re-filter is two orders of magnitude inside the 50 ms target before the localhost
+round trip is added; the 1M regex case (66 ms) is the one to watch, still well under the
+500 ms revisit trigger in design.md.
+
+**Retained memory per MiB of input** (`cargo run -p looqlog-core --release --example
+mem_probe -- session 64`, live heap via a counting global allocator, 64 MiB per format):
+
+| format | entries | heap retained | per input byte |
+|---|---|---|---|
+| JSON Lines | 523,614 | 493 MB | **7.34x** |
+| logfmt | 703,921 | 687 MB | **10.24x** |
+| plain text | 995,990 | 232 MB | **3.46x** |
+
+Raw lines are ~1x of that (kept for `set_format` re-parse); the rest is `Entry` — a
+`BTreeMap<String, FieldValue>` per line is allocation-heavy, which is why the structured
+formats cost more than plain text. The size cap is derived from the worst case, logfmt.
+
+**Filter round trip.** `cargo test --release -p looqlog --test cli -- filter_round_trip
+--nocapture`: a `query` with `level=…` over 10,000 retained JSON entries, from send to
+reply over a real localhost WebSocket against the release binary — median **0.28 ms**
+(five samples, 0.27–0.31 ms). The 50 ms TDR §11 target holds with two orders of
+magnitude to spare. The same run's coalescing check: 10,000 stdin lines produced **2**
+`grown` notifications in 102 ms, the last one carrying the exact total.
+
+**Manual run (Playwright, Chromium).** `looqlog tests/fixtures/sample.jsonl`: page opened
+straight into 20 entries, no picker; `level=ERROR` chip → 2 rows; `re:[unclosed` →
+inline "invalid regex: unclosed character class" with the 2 rows still shown; `refused`
+→ 1 row with a highlight; detail pane showed fields and the raw line; a real mouse drag
+on the timeline → `#range=` and 5 rows; uploading a logfmt file replaced the source
+(3 entries, inventory `level`/`svc` only); reload with `#format=plain` → "plain (set
+explicitly)"; `#format=logfmt&filter=svc%3Da&filter=nope%3Dx` → rows 1,3 and the notice
+"field(s) not present in this file: nope". No CSP violation in the console (the only
+error is the pre-existing `/favicon.ico` 404). `yes | head -n 300000 | looqlog --max-lines
+100000`: marker "200000 oldest lines evicted", 100,000 retained, first row ordinal
+299,977 when following the tail; a reload kept the history; killing the process turned
+the indicator into "Connection to looqlog lost — retrying…".
+
+**Decisions made during apply** (all confirmed with the user, design.md updated):
+query state is per connection (`View`), not one shared query — two tabs would otherwise
+overwrite each other's filters; chain collapsing moved to the backend (toggled roots XOR
+search-matched members), so virtual-scroll offsets count the collapsed view; an argv
+file above the warning size is read with a warning (the command line is the
+confirmation), above the cap it is refused; `set_format` carries `tz_offset_minutes` so
+`#tz=` keeps working; `--max-lines` counts raw lines.
+
+**Small protocol additions** not spelled out in design.md: a `stats` request (source
+name/error/warning, detection, diagnostics, field inventory, level counts — the page needs
+them and no notification carries them), and an optional `anchor` ordinal on `window`
+(`Session::locate`) so a paused live view stays on the entry it was showing while the
+front is evicted. The timeline's bucket grid now includes the entry exactly at the end of
+the span — the TS version it was ported from silently dropped it.
+
 ## Ideas for later
 
 - The field inventory is noisy on logcat in a way this change deliberately left alone.

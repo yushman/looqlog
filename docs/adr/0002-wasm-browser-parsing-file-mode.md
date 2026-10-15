@@ -1,6 +1,6 @@
 # 0002. Parse log files in browser-side WASM; backend never reads the file in file mode
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0010
 - **Date:** 2026-08-08
 
 ## Context

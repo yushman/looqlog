@@ -2,10 +2,9 @@
 // `frontend-three-pane-layout`; D1/D2/D5 of `filtering-and-search`). Search, time
 // range, level and one collapsible section per inventory field, all in one rail.
 // Owns only UI-local mechanics — which values are toggled, the raw search text, the
-// last successfully compiled query, the text in the range inputs. It never computes
-// the predicate result itself (the shell/`EntryIndex` do that over the actual
-// dataset); its job is to turn clicks and keystrokes into `filters-change` /
-// `range-change` events carrying committed state.
+// text in the range inputs. Compiling the search and evaluating it are the backend's
+// (ADR-0010): this turns clicks and keystrokes into `filters-change` / `range-change`
+// events, and takes back what the backend made of the search via `applyQueryReply`.
 //
 // The combination rule is stated in the UI itself, not only in the spec —
 // `filtering` spec, "Combination rule ... SHALL be stated in the UI or its help
@@ -21,11 +20,8 @@
 // synthesises no `click` at all, so filters silently stopped responding at ~25
 // lines/sec while looking perfectly normal.
 
-import { knownFieldNames } from "../predicate";
-import type { CompiledQuery } from "../predicate";
-import { compileQuery, extractFieldTokens } from "../search-query";
+import type { FieldInventoryDto, QueryReplyDto } from "../query-types";
 import type { TimeRange } from "../time-range";
-import type { FieldInventoryDto } from "../wasm-types";
 import { isNarrowLayout } from "./looqlog-workspace";
 
 /** UI-side cap on how many values a field lists, independent of the parser's own
@@ -49,7 +45,6 @@ const LEVEL_ORDER = ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"];
 export interface FiltersChangeDetail {
   fieldFilters: Map<string, Set<string>>;
   queryText: string;
-  compiledQuery: CompiledQuery;
 }
 
 interface FieldModel {
@@ -111,15 +106,10 @@ export class LooqlogFilterBar extends HTMLElement {
   private inventory: FieldInventoryDto | null = null;
   private levelCounts: ReadonlyMap<string, number> = new Map();
   private fieldFilters = new Map<string, Set<string>>();
-  private compiledQuery: CompiledQuery = { kind: "none" };
   private queryError: string | null = null;
   private activeRange: TimeRange | null = null;
-  /** Debounces `emitChange` for keystrokes only — value clicks stay immediate.
-   * Measured cost (`docs/devlog.md`): re-filtering + re-rendering the table and
-   * timeline on every keystroke cost ~30-50ms at 10k entries in a real browser.
-   * `recompileQuery` still runs on every keystroke so the error banner and the
-   * `field=value` promotion stay instant; only the expensive downstream re-render
-   * waits for typing to pause. */
+  /** Debounces `emitChange` for keystrokes only — value clicks stay immediate, so a
+   * query round trip is not sent per keystroke. */
   private searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private static readonly SEARCH_DEBOUNCE_MS = 150;
 
@@ -198,7 +188,7 @@ export class LooqlogFilterBar extends HTMLElement {
         event.stopPropagation();
         this.clearSearchDebounce();
         this.searchInputEl.value = "";
-        this.setQuery("");
+        this.emitChange();
       }
     });
     // Delegated on the sections container, which is created once and never
@@ -233,8 +223,8 @@ export class LooqlogFilterBar extends HTMLElement {
   }
 
   /** New dataset, or an updated field inventory for a live stream — the field
-   * inventory is the parser's cumulative snapshot; `levelCounts` comes from
-   * `EntryIndex.levelStats` since `level` never enters that inventory. Active
+   * inventory is the parser's cumulative snapshot; `levelCounts` are the retained
+   * entries per level, since `level` never enters that inventory. Active
    * filters referencing fields/values not in this snapshot are kept (still shown,
    * still applied) rather than silently dropped — a value can be legitimately
    * active before the inventory has caught up to it (live mode) or after eviction
@@ -268,7 +258,6 @@ export class LooqlogFilterBar extends HTMLElement {
   reset(): void {
     this.clearSearchDebounce();
     this.fieldFilters = new Map();
-    this.compiledQuery = { kind: "none" };
     this.queryError = null;
     this.searchInputEl.value = "";
     this.syncSections();
@@ -283,17 +272,30 @@ export class LooqlogFilterBar extends HTMLElement {
     this.clearSearchDebounce();
     this.fieldFilters = new Map([...fieldFilters].map(([f, vs]) => [f, new Set(vs)]));
     this.searchInputEl.value = queryText;
-    this.recompileQuery(queryText, /* emit */ false);
     this.syncSections();
     this.emitChange();
   }
 
-  getState(): { fieldFilters: Map<string, Set<string>>; queryText: string } {
-    return { fieldFilters: new Map(this.fieldFilters), queryText: this.searchInputEl.value };
+  /** What the backend made of the search text sent as `sentText`: `field=value`
+   * tokens become chips (and leave the input, unless the user has typed on since),
+   * and a compile error is shown inline while the previous results stay. */
+  applyQueryReply(reply: Pick<QueryReplyDto, "tokens" | "remainingText" | "compileError">, sentText: string): void {
+    this.queryError = reply.compileError;
+    this.renderError();
+    if (reply.compileError !== null || reply.tokens.length === 0) {
+      return;
+    }
+    for (const t of reply.tokens) {
+      this.toggleValue(t.field, t.value, true, /* emit */ false);
+    }
+    if (this.searchInputEl.value === sentText) {
+      this.searchInputEl.value = reply.remainingText;
+    }
+    this.syncSections();
   }
 
-  private knownFields(): Set<string> {
-    return knownFieldNames(this.inventory);
+  getState(): { fieldFilters: Map<string, Set<string>>; queryText: string } {
+    return { fieldFilters: new Map(this.fieldFilters), queryText: this.searchInputEl.value };
   }
 
   private applyRangeInputs(): void {
@@ -323,39 +325,7 @@ export class LooqlogFilterBar extends HTMLElement {
   }
 
   private handleSearchInput(): void {
-    const raw = this.searchInputEl.value;
-    const { tokens, remainingText } = extractFieldTokens(raw, this.knownFields());
-    if (tokens.length > 0) {
-      for (const t of tokens) {
-        this.toggleValue(t.field, t.value, true, /* emit */ false);
-      }
-      this.searchInputEl.value = remainingText;
-      this.syncSections();
-    }
-    this.recompileQuery(this.searchInputEl.value, /* emit */ false);
     this.scheduleEmit();
-  }
-
-  /** A compile error never touches `compiledQuery` — the previously active one
-   * keeps being what `filters-change` reports and what the table renders against,
-   * so a table full of results never flips to empty because of a typo. */
-  private recompileQuery(text: string, emit: boolean): void {
-    const result = compileQuery(text);
-    if (result.error !== null) {
-      this.queryError = result.error;
-      this.renderError();
-      return; // compiledQuery intentionally left untouched
-    }
-    this.queryError = null;
-    this.compiledQuery = result.compiled!;
-    this.renderError();
-    if (emit) {
-      this.emitChange();
-    }
-  }
-
-  private setQuery(text: string): void {
-    this.recompileQuery(text, true);
   }
 
   private scheduleEmit(): void {
@@ -423,7 +393,6 @@ export class LooqlogFilterBar extends HTMLElement {
     this.clearSearchDebounce();
     this.fieldFilters = new Map();
     this.searchInputEl.value = "";
-    this.compiledQuery = { kind: "none" };
     this.queryError = null;
     this.syncSections();
     this.renderError();
@@ -434,7 +403,6 @@ export class LooqlogFilterBar extends HTMLElement {
     const detail: FiltersChangeDetail = {
       fieldFilters: new Map(this.fieldFilters),
       queryText: this.searchInputEl.value,
-      compiledQuery: this.compiledQuery,
     };
     this.dispatchEvent(new CustomEvent<FiltersChangeDetail>("filters-change", { detail }));
   }
@@ -454,7 +422,7 @@ export class LooqlogFilterBar extends HTMLElement {
       this.countEl.textContent = "";
       return;
     }
-    const hasFilters = this.fieldFilters.size > 0 || this.compiledQuery.kind !== "none";
+    const hasFilters = this.fieldFilters.size > 0 || this.searchInputEl.value.length > 0;
     if (matching === 0 && total > 0 && hasFilters) {
       // `filtering` spec: "A filter that matches nothing is distinguishable" — from
       // an empty file, and from a search that's still mid-typo.

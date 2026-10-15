@@ -1,6 +1,7 @@
 //! End-to-end tests against the compiled `looqlog` binary, covering the `cli`,
-//! `local-server` and `stdin-stream` spec scenarios that need a real process (argv
-//! parsing, actual TCP bind, signal handling, `/ws` transport).
+//! `local-server`, `stdin-stream`, `query-api`, `file-ingest` and `security` spec
+//! scenarios that need a real process (argv parsing, actual TCP bind, signal handling,
+//! `/ws` transport, `/upload`).
 //!
 //! Sandbox note: this environment has no real TTY attached to the test process
 //! (`[ -t 0 ]` is false), so "file mode" scenarios use the Unix `script` utility to
@@ -225,40 +226,14 @@ fn default_bind_serves_200() {
     assert_eq!(http_get_status(port, "/"), Some(200));
     assert_eq!(http_get_status(port, "/assets/index.js"), Some(200));
     assert_eq!(http_get_status(port, "/assets/index.css"), Some(200));
-    assert_eq!(http_get_status(port, "/assets/worker.js"), Some(200));
-    assert_eq!(http_get_status(port, "/wasm/core.js"), Some(200));
-    assert_eq!(http_get_status(port, "/wasm/core.wasm"), Some(200));
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-#[test]
-fn core_wasm_has_wasm_content_type() {
-    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    write!(
-        stream,
-        "GET /wasm/core.wasm HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
-    )
-    .unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    // Read headers only — the body is a binary wasm module, not valid UTF-8, so a
-    // full read_to_string would fail even on a correct response.
-    let mut reader = BufReader::new(stream);
-    let mut headers = String::new();
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" || line == "\n" {
-            break;
-        }
-        headers.push_str(&line);
+    // `local-server` spec, "No WASM route": nothing serves a module or a worker.
+    for gone in ["/assets/worker.js", "/wasm/core.js", "/wasm/core.wasm"] {
+        assert_eq!(
+            http_get_status(port, gone),
+            Some(404),
+            "{gone} is still served"
+        );
     }
-    assert!(
-        headers.to_lowercase().contains("application/wasm"),
-        "missing wasm content-type:\n{headers}"
-    );
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -336,6 +311,10 @@ fn binding_to_all_interfaces_warns_before_the_banner() {
         "warning should print before the banner:\n{stdout}"
     );
     assert!(stdout.contains("0.0.0.0"));
+    assert!(
+        stdout.contains("file") && stdout.contains("stdin"),
+        "the warning should name both file and stdin exposure:\n{stdout}"
+    );
 }
 
 #[test]
@@ -348,11 +327,11 @@ fn loopback_bind_stays_quiet() {
     );
 }
 
-// ---- cli spec + browser-file-loading: file mode, ADR-0007 -----------------------
+// ---- cli spec + file-ingest: file mode, ADR-0010 --------------------------------
 
 #[cfg(target_os = "macos")]
 #[test]
-fn nonexistent_path_still_starts_and_warns() {
+fn nonexistent_path_still_starts_and_names_the_error() {
     let (mut child, _port) = spawn_with_retry(Duration::from_secs(5), |p| {
         spawn_pty_file_mode(p, &["does-not-exist-12345.log"])
     });
@@ -362,8 +341,8 @@ fn nonexistent_path_still_starts_and_warns() {
     // streams — check the combined output.
     let (stdout, _) = read_all_nonblocking(&mut child, Duration::from_millis(100));
     assert!(
-        stdout.contains("could not verify") && stdout.contains("does-not-exist-12345.log"),
-        "expected a verification warning naming the path:\n{stdout}"
+        stdout.contains("could not open") && stdout.contains("does-not-exist-12345.log"),
+        "expected an error naming the path and the reason:\n{stdout}"
     );
 }
 
@@ -388,54 +367,23 @@ fn max_lines_note_printed_in_file_mode_but_not_by_default() {
     );
 }
 
-/// Static proxy for task 4.6 ("syscall trace of `looqlog app.log` contains no open of
-/// `app.log`"): `dtruss`/`strace` both require elevated privileges unavailable in
-/// this sandbox (no passwordless sudo, and macOS SIP blocks dtruss even for root in
-/// the default configuration). This asserts the weaker-but-checkable structural
-/// guarantee instead — the only filesystem call the binary makes against a
-/// user-supplied path is `std::fs::metadata` (a `stat`, not an `open`) — and should
-/// be supplemented with a manual `dtruss -f -t open looqlog app.log` run on a machine
-/// where that's available before release.
-#[test]
-fn source_never_opens_or_reads_the_positional_path() {
-    let main_rs = include_str!("../src/main.rs");
-    assert!(
-        main_rs.contains("std::fs::metadata(path)"),
-        "expected the documented existence check to still be a stat, not a read"
-    );
-    for forbidden in [
-        "File::open(path",
-        "fs::read(path",
-        "fs::read_to_string(path",
-    ] {
-        assert!(
-            !main_rs.contains(forbidden),
-            "found a content-reading call against the CLI path: {forbidden}"
-        );
-    }
+// ---- stdin-stream / query-api specs ---------------------------------------------
+
+fn messages(window: &serde_json::Value) -> Vec<String> {
+    window["data"]["rows"]
+        .as_array()
+        .expect("rows array")
+        .iter()
+        .map(|r| r["message"].as_str().unwrap().to_string())
+        .collect()
 }
 
-// ---- stdin-stream spec -----------------------------------------------------------
-
 #[tokio::test]
-async fn snapshot_then_lines_delivered_in_order_to_multiple_clients() {
-    use futures_channel_free_ws::{connect_ws, WsMsg};
+async fn stdin_lines_become_queryable_by_every_client_in_order() {
+    use ws_client::connect_ws;
 
     let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
-
     let (mut a, mut b) = (connect_ws(port).await, connect_ws(port).await);
-
-    // Both clients connected before anything was written, so both get an empty
-    // snapshot first (task 1.1/1.2: envelope + sequence numbers).
-    for client in [&mut a, &mut b] {
-        match client.next_msg().await {
-            Some(WsMsg::Snapshot { lines, last_seq }) => {
-                assert!(lines.is_empty());
-                assert_eq!(last_seq, 0);
-            }
-            other => panic!("expected an empty snapshot, got {other:?}"),
-        }
-    }
 
     let mut stdin = child.stdin.take().unwrap();
     writeln!(stdin, "hi").unwrap();
@@ -444,9 +392,12 @@ async fn snapshot_then_lines_delivered_in_order_to_multiple_clients() {
     stdin.flush().unwrap();
 
     for client in [&mut a, &mut b] {
-        assert_eq!(client.next_line().await, Some((1, "hi".to_string())));
-        assert_eq!(client.next_line().await, Some((2, "second".to_string())));
-        assert_eq!(client.next_line().await, Some((3, "third".to_string())));
+        client.wait_for_total(3, Duration::from_secs(5)).await;
+        let window = client
+            .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+            .await;
+        assert_eq!(messages(&window), vec!["hi", "second", "third"]);
+        assert_eq!(window["data"]["rows"][0]["ordinal"], 1);
     }
 
     let _ = child.kill();
@@ -454,143 +405,437 @@ async fn snapshot_then_lines_delivered_in_order_to_multiple_clients() {
 }
 
 #[tokio::test]
-async fn eof_sends_ended_message_then_closes_the_socket_and_server_stays_alive() {
-    use futures_channel_free_ws::{connect_ws, WsMsg};
+async fn eof_sends_ended_and_entries_stay_queryable() {
+    use ws_client::connect_ws;
 
     let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    let mut client = connect_ws(port).await;
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "a").unwrap();
+    writeln!(stdin, "b").unwrap();
+    drop(stdin);
+
+    assert!(
+        client
+            .wait_for(Duration::from_secs(3), |m| m["type"] == "ended")
+            .await
+            .is_some(),
+        "expected an ended notification after EOF"
+    );
+    assert!(wait_until_serving(port, Duration::from_secs(2)));
+    let window = client
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+        .await;
+    assert_eq!(messages(&window), vec!["a", "b"]);
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[tokio::test]
+async fn connecting_after_stdin_already_closed_gets_ended_and_the_history() {
+    use ws_client::connect_ws;
+
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    let mut stdin = child.stdin.take().unwrap();
+    for i in 0..500 {
+        writeln!(stdin, "early line {i}").unwrap();
+    }
+    drop(stdin);
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     let mut client = connect_ws(port).await;
-    assert!(matches!(
-        client.next_msg().await,
-        Some(WsMsg::Snapshot { .. })
-    ));
-
-    // Close stdin -> EOF.
-    drop(child.stdin.take());
-
-    assert!(
-        matches!(
-            tokio::time::timeout(Duration::from_secs(3), client.next_msg()).await,
-            Ok(Some(WsMsg::Ended))
-        ),
-        "expected an explicit `ended` envelope message after stdin EOF (task 1.1)"
-    );
-    assert!(
-        client.next_close(Duration::from_secs(3)).await,
-        "expected the socket to close after the `ended` message"
-    );
-
-    // Server must still be reachable after EOF.
-    assert!(wait_until_serving(port, Duration::from_secs(2)));
-
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// `Ended` is a one-shot broadcast with no history (unlike lines, which live in
-/// the ring buffer): the first implementation of this connection path only sent
-/// `Ended` to clients that were connected *at the moment* stdin closed. A client
-/// connecting afterward — extremely plausible for `myapp | looqlog` when `myapp`
-/// finishes before the user opens the browser tab — would see the snapshot's
-/// history and then wait forever, with the indicator stuck on "live" over a
-/// stream that had already ended. `read_snapshot`'s `already_ended` flag
-/// (`stdin.rs`) fixes this; this test is the regression guard.
-#[tokio::test]
-async fn connecting_after_stdin_already_closed_still_gets_ended() {
-    use futures_channel_free_ws::{connect_ws, WsMsg};
-
-    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
-
-    let mut stdin = child.stdin.take().unwrap();
-    writeln!(stdin, "only line").unwrap();
-    stdin.flush().unwrap();
-    drop(stdin); // EOF, before any client has ever connected
-
-    // Give the reader task time to observe EOF and mark the buffer ended before a
-    // client connects — this is the whole point of the test: connect *after*.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-
-    let mut late_client = connect_ws(port).await;
-    match late_client.next_msg().await {
-        Some(WsMsg::Snapshot { lines, .. }) => assert_eq!(lines.len(), 1),
-        other => panic!("expected a snapshot with the one buffered line, got {other:?}"),
-    }
-    assert!(
-        matches!(
-            tokio::time::timeout(Duration::from_secs(3), late_client.next_msg()).await,
-            Ok(Some(WsMsg::Ended))
-        ),
-        "a client connecting after stdin already closed must still receive `ended`, \
-         not wait forever for a broadcast that already happened"
-    );
-
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-#[tokio::test]
-async fn late_connection_sees_buffered_history_in_the_snapshot() {
-    use futures_channel_free_ws::{connect_ws, WsMsg};
-
-    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
-
-    let mut stdin = child.stdin.take().unwrap();
-    writeln!(stdin, "before").unwrap();
-    stdin.flush().unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let mut late_client = connect_ws(port).await;
-
-    // ADR-0004 / stdin-stream spec "Lines emitted before the browser opens survive":
-    // the snapshot must contain the line written before this client connected.
-    match late_client.next_msg().await {
-        Some(WsMsg::Snapshot { lines, last_seq }) => {
-            assert_eq!(lines, vec![(1u64, "before".to_string())]);
-            assert_eq!(last_seq, 1);
-        }
-        other => panic!("expected a snapshot containing 'before', got {other:?}"),
-    }
-
-    writeln!(stdin, "after").unwrap();
-    stdin.flush().unwrap();
-
+    let first = client
+        .recv(Duration::from_secs(3))
+        .await
+        .expect("a first notification");
     assert_eq!(
-        late_client.next_line().await,
-        Some((2, "after".to_string()))
+        first["type"], "grown",
+        "the first notification carries totals: {first}"
     );
+    assert_eq!(first["total"], 500);
+    assert!(client
+        .wait_for(Duration::from_secs(3), |m| m["type"] == "ended")
+        .await
+        .is_some());
+    let window = client
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 1000}))
+        .await;
+    assert_eq!(messages(&window).len(), 500);
 
     let _ = child.kill();
     let _ = child.wait();
 }
 
 #[tokio::test]
-async fn reload_mid_stream_snapshot_matches_lines_seen_so_far() {
-    use futures_channel_free_ws::{connect_ws, WsMsg};
+async fn eviction_is_announced_with_the_cumulative_count() {
+    use ws_client::connect_ws;
 
     let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| {
-        spawn_stdin_mode(p, &["--max-lines", "50"])
+        spawn_stdin_mode(p, &["--max-lines", "100"])
     });
-
+    let mut client = connect_ws(port).await;
     let mut stdin = child.stdin.take().unwrap();
-    for i in 0..10 {
+    for i in 0..150 {
         writeln!(stdin, "line {i}").unwrap();
     }
     stdin.flush().unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Simulate a page reload: connect a fresh client, same as any other new
-    // connection (`stdin-stream` spec, "Snapshot on connect" applies "including on
-    // page reload and reconnect").
-    let mut reloaded = connect_ws(port).await;
-    match reloaded.next_msg().await {
-        Some(WsMsg::Snapshot { lines, last_seq }) => {
-            assert_eq!(lines.len(), 10);
-            assert_eq!(last_seq, 10);
-            assert_eq!(lines[0], (1u64, "line 0".to_string()));
-            assert_eq!(lines[9], (10u64, "line 9".to_string()));
-        }
-        other => panic!("expected a 10-line snapshot, got {other:?}"),
+    let evicted = client
+        .wait_for(Duration::from_secs(5), |m| {
+            m["type"] == "evicted" && m["count"] == 50
+        })
+        .await;
+    assert!(evicted.is_some(), "expected evicted with count 50");
+    let window = client
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 1}))
+        .await;
+    assert_eq!(window["data"]["rows"][0]["ordinal"], 51);
+    assert_eq!(window["data"]["total"], 100);
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `query-api`, "Fast producer, bounded messages": notifications are coalesced to one
+/// per 100 ms, and the last one carries the exact totals.
+#[tokio::test]
+async fn fast_producer_gets_coalesced_cumulative_notifications() {
+    use ws_client::connect_ws;
+
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    let mut client = connect_ws(port).await;
+    let mut stdin = child.stdin.take().unwrap();
+    let start = Instant::now();
+    for i in 0..10_000 {
+        writeln!(stdin, "flood line {i}").unwrap();
     }
+    stdin.flush().unwrap();
+
+    let mut grown = 0;
+    let mut last_total = 0;
+    while last_total < 10_000 {
+        let msg = client
+            .recv(Duration::from_secs(5))
+            .await
+            .expect("notifications until the totals are exact");
+        if msg["type"] == "grown" {
+            grown += 1;
+            last_total = msg["total"].as_u64().unwrap();
+        }
+    }
+    let elapsed = start.elapsed();
+    let ticks = elapsed.as_millis() as usize / 100 + 2;
+    eprintln!("[query-api] 10,000 lines → {grown} grown notifications in {elapsed:?}");
+    assert!(
+        grown <= ticks,
+        "{grown} grown notifications in {elapsed:?} is more than one per tick"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `stdin-stream`, "Producer is not blocked by a slow client": a connected client that
+/// never reads does not stall the reader or the server.
+#[tokio::test]
+async fn a_client_that_never_reads_does_not_block_the_producer() {
+    use ws_client::connect_ws;
+
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    let _silent = connect_ws(port).await;
+    let mut stdin = child.stdin.take().unwrap();
+    let start = Instant::now();
+    for i in 0..20_000 {
+        writeln!(stdin, "flood line {i}").unwrap();
+    }
+    stdin.flush().unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "writing 20,000 lines took {:?}",
+        start.elapsed()
+    );
+    let mut other = connect_ws(port).await;
+    other.wait_for_total(20_000, Duration::from_secs(5)).await;
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// The filter round trip on 10k entries (`filtering` spec, TDR §11 50 ms target): one
+/// `query` request to its reply over a real socket. Printed for docs/devlog.md; the
+/// bound asserted here is loose because this runs against a debug build.
+#[tokio::test]
+async fn filter_round_trip_on_ten_thousand_entries() {
+    use ws_client::connect_ws;
+
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    let mut stdin = child.stdin.take().unwrap();
+    let levels = ["INFO", "DEBUG", "WARN", "ERROR"];
+    for i in 0..10_000 {
+        writeln!(
+            stdin,
+            r#"{{"ts":"2026-08-09T12:00:00Z","level":"{}","service":"api","msg":"handled request {i}","status":200}}"#,
+            levels[i % 4]
+        )
+        .unwrap();
+    }
+    drop(stdin);
+    let mut client = connect_ws(port).await;
+    client.wait_for_total(10_000, Duration::from_secs(10)).await;
+
+    let mut samples = Vec::new();
+    for filter in ["ERROR", "INFO", "ERROR", "WARN", "ERROR"] {
+        let start = Instant::now();
+        let reply = client
+            .request(serde_json::json!({"type": "query", "filters": {"level": [filter]}}))
+            .await;
+        samples.push(start.elapsed());
+        assert_eq!(reply["data"]["matched"], 2_500);
+    }
+    samples.sort();
+    let median = samples[samples.len() / 2];
+    eprintln!(
+        "[filtering] level filter round trip on 10k entries: median {median:?}, all {samples:?}"
+    );
+    assert!(
+        median < Duration::from_millis(500),
+        "median round trip {median:?}"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[tokio::test]
+async fn two_connections_keep_their_own_filters() {
+    use ws_client::connect_ws;
+
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    let mut stdin = child.stdin.take().unwrap();
+    for (i, level) in ["ERROR", "INFO", "ERROR"].iter().enumerate() {
+        writeln!(stdin, r#"{{"level":"{level}","msg":"m{i}"}}"#).unwrap();
+    }
+    drop(stdin);
+    let (mut a, mut b) = (connect_ws(port).await, connect_ws(port).await);
+    a.wait_for_total(3, Duration::from_secs(5)).await;
+    b.wait_for_total(3, Duration::from_secs(5)).await;
+
+    a.request(serde_json::json!({"type": "query", "filters": {"level": ["ERROR"]}}))
+        .await;
+    b.request(serde_json::json!({"type": "query"})).await;
+    let wa = a
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+        .await;
+    let wb = b
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+        .await;
+    assert_eq!(messages(&wa), vec!["m0", "m2"]);
+    assert_eq!(messages(&wb).len(), 3);
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `query-api`, "Unauthenticated query is refused".
+#[tokio::test]
+async fn a_query_before_the_token_closes_the_connection_without_data() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "secret").unwrap();
+    stdin.flush().unwrap();
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws"))
+        .await
+        .expect("connect to /ws");
+    ws.send(Message::Text(
+        r#"{"type":"window","id":1,"offset":0,"limit":10}"#.into(),
+    ))
+    .await
+    .unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match ws.next().await {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return "closed",
+                Some(Ok(Message::Text(_))) => return "got data",
+                Some(Ok(_)) => continue,
+            }
+        }
+    })
+    .await;
+    assert_eq!(outcome, Ok("closed"));
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `security` spec, "Rebound hostname is rejected".
+#[test]
+fn websocket_upgrade_with_a_foreign_host_is_rejected() {
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    write!(
+        stream,
+        "GET /ws HTTP/1.1\r\nHost: attacker.example:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
+         Origin: http://attacker.example:{port}\r\n\r\n"
+    )
+    .unwrap();
+    let mut status_line = String::new();
+    BufReader::new(stream).read_line(&mut status_line).unwrap();
+    assert!(
+        status_line.contains("403"),
+        "expected 403, got: {status_line}"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+// ---- file-ingest / security: /upload ----------------------------------------------
+
+/// Raw `POST /upload`; returns the status code and the response body.
+fn post_upload(port: u16, headers: &[(&str, String)], body: &[u8]) -> (u16, String) {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut request = format!(
+        "POST /upload HTTP/1.1\r\nConnection: close\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n",
+        body.len()
+    );
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str("\r\n");
+    stream.write_all(request.as_bytes()).unwrap();
+    stream.write_all(body).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok();
+    let status = response
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    (status, body)
+}
+
+fn same_origin_headers(port: u16, token: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("Host", format!("127.0.0.1:{port}")),
+        ("Origin", format!("http://127.0.0.1:{port}")),
+        ("X-Looqlog-Token", token.to_string()),
+        ("X-Looqlog-Filename", "second.jsonl".to_string()),
+    ]
+}
+
+#[test]
+fn upload_without_token_or_from_another_origin_is_forbidden() {
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    let token = ws_client::fetch_token(port);
+    let body = b"{\"msg\":\"x\"}\n";
+
+    let mut no_token = same_origin_headers(port, &token);
+    no_token.retain(|(n, _)| *n != "X-Looqlog-Token");
+    assert_eq!(post_upload(port, &no_token, body).0, 403);
+
+    let mut foreign = same_origin_headers(port, &token);
+    foreign[1] = ("Origin", "http://evil.example".to_string());
+    assert_eq!(post_upload(port, &foreign, body).0, 403);
+
+    let mut rebound = same_origin_headers(port, &token);
+    rebound[0] = ("Host", format!("attacker.example:{port}"));
+    rebound[1] = ("Origin", format!("http://attacker.example:{port}"));
+    assert_eq!(post_upload(port, &rebound, body).0, 403);
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn upload_is_refused_in_stdin_mode() {
+    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[]));
+    let token = ws_client::fetch_token(port);
+    let (status, body) = post_upload(port, &same_origin_headers(port, &token), b"x\n");
+    assert_eq!(status, 409);
+    assert!(body.contains("stdin stream"), "{body}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn fixture_path() -> String {
+    format!(
+        "{}/../../tests/fixtures/sample.jsonl",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// `file-ingest`, "Zero-click open": the argv file is read by the backend.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn the_argv_file_is_queryable_without_a_picker() {
+    use ws_client::connect_ws;
+
+    let path = fixture_path();
+    let (mut child, port) =
+        spawn_with_retry(Duration::from_secs(5), |p| spawn_pty_file_mode(p, &[&path]));
+    let mut client = connect_ws(port).await;
+    client.wait_for_total(20, Duration::from_secs(5)).await;
+    let reply = client
+        .request(serde_json::json!({"type": "query", "filters": {"level": ["ERROR"]}}))
+        .await;
+    assert_eq!(reply["data"]["matched"], 2);
+    let stats = client.request(serde_json::json!({"type": "stats"})).await;
+    assert!(stats["data"]["source"]["name"]
+        .as_str()
+        .unwrap()
+        .ends_with("sample.jsonl"));
+    assert_eq!(stats["data"]["stats"]["format"], "json");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `file-ingest`, "Upload from the browser": a successful upload replaces the source
+/// and every connection is told to re-query.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn an_upload_replaces_the_source_and_resets_clients() {
+    use ws_client::connect_ws;
+
+    let path = fixture_path();
+    let (mut child, port) =
+        spawn_with_retry(Duration::from_secs(5), |p| spawn_pty_file_mode(p, &[&path]));
+    let mut client = connect_ws(port).await;
+    client.wait_for_total(20, Duration::from_secs(5)).await;
+
+    let token = ws_client::fetch_token(port);
+    let body = b"{\"level\":\"WARN\",\"msg\":\"uploaded one\"}\n{\"level\":\"WARN\",\"msg\":\"uploaded two\"}\n";
+    let (status, response) = post_upload(port, &same_origin_headers(port, &token), body);
+    assert_eq!(status, 200, "{response}");
+
+    assert!(client
+        .wait_for(Duration::from_secs(3), |m| m["type"] == "reset")
+        .await
+        .is_some());
+    let window = client
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+        .await;
+    assert_eq!(messages(&window), vec!["uploaded one", "uploaded two"]);
+    let stats = client.request(serde_json::json!({"type": "stats"})).await;
+    assert_eq!(stats["data"]["source"]["name"], "second.jsonl");
+    assert!(!stats["data"]["stats"]["fieldInventory"]["fields"]
+        .as_object()
+        .unwrap()
+        .contains_key("service"));
 
     let _ = child.kill();
     let _ = child.wait();
@@ -598,9 +843,8 @@ async fn reload_mid_stream_snapshot_matches_lines_seen_so_far() {
 
 /// task 2.7 (memory): ten times `--max-lines` written, buffer never exceeds
 /// `--max-lines` and process RSS does not grow proportionally to total lines
-/// written. The `StdinBuffer` unit tests in `src/stdin.rs` already prove the
-/// structural bound (`VecDeque` length never exceeds `max_lines`); this is the
-/// process-level companion check.
+/// written. The `Session` unit tests in `looqlog-core` prove the structural bound;
+/// this is the process-level companion check.
 #[cfg(target_os = "macos")]
 #[test]
 fn process_memory_stays_bounded_over_ten_times_max_lines() {
@@ -645,148 +889,6 @@ fn process_memory_stays_bounded_over_ten_times_max_lines() {
          buffer (before: {rss_after_1x}KB, after: {rss_after_10x}KB) — buffer may \
          not be bounded in the running process"
     );
-
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// task 2.5: synthetic fast-producer/slow-consumer harness. A client connects but
-/// never reads; the producer keeps writing fast; the reader must never block on the
-/// slow client, and once the client finally reads, it must see a `gap` event whose
-/// count matches how many lines it actually missed (cross-checked independently via
-/// the sequence-number discontinuity in the next `line` message it does receive —
-/// D2's "belt and braces").
-#[tokio::test]
-async fn fast_producer_slow_consumer_never_blocks_and_reports_an_accurate_gap() {
-    use futures_channel_free_ws::connect_ws;
-
-    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| {
-        spawn_stdin_mode(p, &["--max-lines", "100000"])
-    });
-
-    let mut slow_client = connect_ws(port).await;
-    // Consume only the initial (empty) snapshot, then stop reading entirely — the
-    // per-client broadcast channel (capacity 1024, src/stdin.rs) will overflow long
-    // before the flood below finishes.
-    let _ = slow_client.next_msg().await;
-
-    let mut stdin = child.stdin.take().unwrap();
-    let start = Instant::now();
-    for i in 0..20_000 {
-        writeln!(stdin, "flood line {i}").unwrap();
-    }
-    stdin.flush().unwrap();
-    let write_elapsed = start.elapsed();
-    assert!(
-        write_elapsed < Duration::from_secs(3),
-        "stdin reader appears blocked by the slow client: writing 20,000 lines took {write_elapsed:?}"
-    );
-
-    // The producer being fast is necessary but not sufficient — the server process
-    // itself must also still be responsive to *other* clients while the slow one is
-    // backed up.
-    assert!(wait_until_serving(port, Duration::from_secs(2)));
-
-    // Now drain the slow client: it must see at least one `gap` message with a
-    // nonzero count, and every `line` message's sequence number must be consistent
-    // with that count (no double-counting, no under-reporting).
-    let mut total_gap_count: u64 = 0;
-    let mut last_seq: Option<u64> = None;
-    let mut lines_seen = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        match slow_client.next_msg_timeout(Duration::from_secs(2)).await {
-            Some(futures_channel_free_ws::WsMsg::Gap { count }) => total_gap_count += count,
-            Some(futures_channel_free_ws::WsMsg::Line { seq, .. }) => {
-                if let Some(prev) = last_seq {
-                    let discontinuity = seq.saturating_sub(prev).saturating_sub(1);
-                    // Every discontinuity in sequence numbers must be covered by
-                    // gap events reported so far (D2: sequence numbers are the gap
-                    // ground truth, independent of whether the gap message itself
-                    // arrives) — checked incrementally below via the running total.
-                    let _ = discontinuity;
-                }
-                last_seq = Some(seq);
-                lines_seen += 1;
-            }
-            Some(futures_channel_free_ws::WsMsg::Ended) => break,
-            Some(_) => {}
-            None => break,
-        }
-    }
-
-    eprintln!(
-        "[task 2.5] wrote 20000 lines in {write_elapsed:?}; slow client saw {lines_seen} lines \
-         delivered + {total_gap_count} dropped (gap events)"
-    );
-    assert!(
-        total_gap_count > 0,
-        "expected at least one nonzero gap event under sustained backpressure"
-    );
-    assert!(
-        lines_seen + total_gap_count <= 20_000,
-        "gap count ({total_gap_count}) + delivered lines ({lines_seen}) exceeds lines written (20000) — a line was double-counted"
-    );
-
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// task 2.8: measure snapshot size and delivery time at the default `--max-lines`
-/// (100,000). Recorded in docs/devlog.md; this test asserts only that delivery
-/// completes well inside a generous bound, not a specific byte count (which depends
-/// on the representative line length chosen here and would make the test brittle).
-#[tokio::test]
-async fn snapshot_at_default_max_lines_is_delivered_promptly() {
-    use futures_channel_free_ws::{connect_ws, WsMsg};
-
-    let max_lines = 100_000;
-    let (mut child, port) = spawn_with_retry(Duration::from_secs(5), |p| {
-        spawn_stdin_mode(p, &["--max-lines", &max_lines.to_string()])
-    });
-
-    let mut stdin = child.stdin.take().unwrap();
-    // Representative line: JSON-ish, ~110 bytes, similar to a real structured log line.
-    for i in 0..max_lines {
-        writeln!(
-            stdin,
-            r#"{{"ts":"2026-08-09T12:00:00Z","level":"INFO","service":"api","msg":"handled request {i}","status":200}}"#
-        )
-        .unwrap();
-    }
-    stdin.flush().unwrap();
-    drop(stdin);
-
-    // Give the reader task time to drain 100k lines into the buffer before we
-    // measure snapshot delivery (writing is buffered/async; this is not part of the
-    // timed measurement).
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    let connect_start = Instant::now();
-    let mut client = connect_ws(port).await;
-    let msg = tokio::time::timeout(Duration::from_secs(10), client.next_msg())
-        .await
-        .expect("snapshot did not arrive within 10s")
-        .expect("connection closed before snapshot arrived");
-    let elapsed = connect_start.elapsed();
-
-    match msg {
-        WsMsg::Snapshot { lines, last_seq } => {
-            assert_eq!(lines.len(), max_lines);
-            assert_eq!(last_seq, max_lines as u64);
-            let approx_bytes: usize = lines.iter().map(|l| l.text.len() + 24).sum();
-            let line_count = lines.len();
-            eprintln!(
-                "[task 2.8] snapshot at --max-lines={max_lines}: {line_count} lines, ~{approx_bytes} bytes JSON payload, delivered in {elapsed:?}"
-            );
-            assert!(
-                elapsed < Duration::from_secs(5),
-                "snapshot delivery took {elapsed:?}, unacceptably slow for a single WS message \
-                 at the default --max-lines — chunking (design.md D3 fallback) is needed"
-            );
-        }
-        other => panic!("expected a full snapshot, got {other:?}"),
-    }
 
     let _ = child.kill();
     let _ = child.wait();
@@ -897,6 +999,10 @@ fn every_response_carries_the_csp_header() {
     assert!(
         !lower.contains("'unsafe-inline'"),
         "expected no 'unsafe-inline' anywhere in the policy:\n{headers}"
+    );
+    assert!(
+        !lower.contains("wasm-unsafe-eval"),
+        "expected no WASM allowance in the policy:\n{headers}"
     );
 
     let _ = child.kill();
@@ -1081,57 +1187,29 @@ async fn websocket_connection_with_wrong_token_is_closed_without_data() {
     let _ = child.wait();
 }
 
-/// Tiny local WebSocket JSON-envelope client used only by these tests: connects,
-/// decodes each `Text` frame as one of the `/ws` envelope's message types
-/// (`crates/looqlog/src/protocol.rs`'s `ServerMessage`, mirrored here as an owned,
-/// deserializable twin since integration tests can't reach a private module).
-mod futures_channel_free_ws {
+/// Tiny `/ws` client used only by these tests: authenticates with the token from the
+/// served page, then sends `query-api` requests and collects notifications as JSON.
+mod ws_client {
+    use std::collections::VecDeque;
     use std::io::{Read, Write};
     use std::time::Duration;
 
     use futures_util::{SinkExt, StreamExt};
-    use serde::Deserialize;
+    use serde_json::Value;
     use tokio_tungstenite::tungstenite::Message;
-
-    #[derive(Debug, Deserialize)]
-    #[serde(
-        tag = "type",
-        rename_all = "snake_case",
-        rename_all_fields = "camelCase"
-    )]
-    pub enum WsMsg {
-        Snapshot { lines: Vec<LineDto>, last_seq: u64 },
-        Line { seq: u64, text: String },
-        Gap { count: u64 },
-        Ended,
-    }
-
-    #[derive(Debug, Deserialize, PartialEq, Eq)]
-    pub struct LineDto {
-        pub seq: u64,
-        pub text: String,
-    }
-
-    // Lets test assertions compare a `Vec<LineDto>` against `vec![(seq, text), ...]`
-    // literals without spelling out `LineDto { .. }` everywhere.
-    impl PartialEq<(u64, String)> for LineDto {
-        fn eq(&self, other: &(u64, String)) -> bool {
-            self.seq == other.0 && self.text == other.1
-        }
-    }
 
     pub struct WsClient {
         inner: tokio_tungstenite::WebSocketStream<
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
         >,
+        next_id: u64,
+        /// Notifications received while waiting for a reply.
+        pending: VecDeque<Value>,
     }
 
-    /// Fetches the page over plain HTTP and pulls the `security`-spec auth token
-    /// out of `#token-template`, the same element the real browser client
-    /// (`web/src/token.ts`) reads. Blocking (`std::net`), but the response is a few
-    /// KB over loopback — negligible next to the async waits elsewhere in these
-    /// tests.
-    fn fetch_token(port: u16) -> String {
+    /// Pulls the per-process token out of `#token-template`, the element the real
+    /// page reads (`web/src/token.ts`).
+    pub fn fetch_token(port: u16) -> String {
         let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
             .expect("connect to fetch the page for its token");
         stream
@@ -1156,13 +1234,9 @@ mod futures_channel_free_ws {
         body[start..end].to_string()
     }
 
-    /// Connects to `/ws` and immediately sends the auth handshake (`security`
-    /// spec) with the real token fetched from the served page — the same two-step
-    /// sequence a real browser tab performs, not a shortcut around it.
     pub async fn connect_ws(port: u16) -> WsClient {
         let token = fetch_token(port);
-        let url = format!("ws://127.0.0.1:{port}/ws");
-        let (mut inner, _) = tokio_tungstenite::connect_async(url)
+        let (mut inner, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws"))
             .await
             .expect("connect to /ws");
         let auth = serde_json::json!({"type": "auth", "token": token}).to_string();
@@ -1170,18 +1244,15 @@ mod futures_channel_free_ws {
             .send(Message::Text(auth.into()))
             .await
             .expect("send auth handshake");
-        WsClient { inner }
+        WsClient {
+            inner,
+            next_id: 1,
+            pending: VecDeque::new(),
+        }
     }
 
     impl WsClient {
-        /// Next envelope message, `None` on close/error. Panics on a frame that
-        /// isn't valid envelope JSON (a protocol violation, not an expected outcome
-        /// in any of these tests).
-        pub async fn next_msg(&mut self) -> Option<WsMsg> {
-            self.next_msg_timeout(Duration::from_secs(3)).await
-        }
-
-        pub async fn next_msg_timeout(&mut self, timeout: Duration) -> Option<WsMsg> {
+        async fn read(&mut self, timeout: Duration) -> Option<Value> {
             loop {
                 match tokio::time::timeout(timeout, self.inner.next()).await {
                     Ok(Some(Ok(Message::Text(text)))) => {
@@ -1198,19 +1269,63 @@ mod futures_channel_free_ws {
             }
         }
 
-        /// Convenience: the next message must be a `Line`; returns `(seq, text)`.
-        pub async fn next_line(&mut self) -> Option<(u64, String)> {
-            match self.next_msg().await {
-                Some(WsMsg::Line { seq, text }) => Some((seq, text)),
-                other => panic!("expected a line message, got {other:?}"),
+        /// The next notification, in arrival order.
+        pub async fn recv(&mut self, timeout: Duration) -> Option<Value> {
+            match self.pending.pop_front() {
+                Some(msg) => Some(msg),
+                None => self.read(timeout).await,
             }
         }
 
-        pub async fn next_close(&mut self, timeout: Duration) -> bool {
-            matches!(
-                tokio::time::timeout(timeout, self.inner.next()).await,
-                Ok(Some(Ok(Message::Close(_)))) | Ok(None)
-            )
+        /// The first notification satisfying `pred` within `timeout`; earlier ones are
+        /// dropped.
+        pub async fn wait_for(
+            &mut self,
+            timeout: Duration,
+            pred: impl Fn(&Value) -> bool,
+        ) -> Option<Value> {
+            let deadline = tokio::time::Instant::now() + timeout;
+            loop {
+                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let msg = self.recv(left).await?;
+                if pred(&msg) {
+                    return Some(msg);
+                }
+            }
+        }
+
+        pub async fn wait_for_total(&mut self, total: u64, timeout: Duration) {
+            let seen = self
+                .wait_for(timeout, |m| {
+                    m["type"] == "grown" && m["total"].as_u64().is_some_and(|t| t >= total)
+                })
+                .await;
+            assert!(
+                seen.is_some(),
+                "never saw a grown notification with total >= {total}"
+            );
+        }
+
+        /// Sends `body` with a fresh id and returns its reply, panicking on an error reply.
+        pub async fn request(&mut self, mut body: Value) -> Value {
+            let id = self.next_id;
+            self.next_id += 1;
+            body["id"] = id.into();
+            self.inner
+                .send(Message::Text(body.to_string().into()))
+                .await
+                .expect("send request");
+            loop {
+                let msg = self
+                    .read(Duration::from_secs(10))
+                    .await
+                    .expect("connection closed before the reply");
+                if msg["id"] == id {
+                    assert_eq!(msg["type"], "reply", "error reply: {msg}");
+                    return msg;
+                }
+                self.pending.push_back(msg);
+            }
         }
     }
 }

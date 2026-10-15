@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/looqlog",
     "crates/looqlog-core",
-    "crates/looqlog-wasm",
 ]
 
 [workspace.package]
@@ -17,7 +16,5 @@ homepage = "https://github.com/yushman/looqlog"
 opt-level = "s"
 lto = true
 # release-hardening: strip debug symbols from the distributed binary (smaller
-# artifact, no local path/symbol leakage in the release build). `core.wasm` is
-# built by wasm-pack/wasm-opt separately (scripts/build-frontend.sh) and is
-# unaffected by this workspace profile.
+# artifact, no local path/symbol leakage in the release build).
 strip = true

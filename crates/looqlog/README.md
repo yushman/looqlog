@@ -1,7 +1,7 @@
 # looqlog
 
 Single-binary CLI that opens a local web UI for browsing a log file or a live stdin
-stream. Parsing happens in WebAssembly inside your own browser.
+stream. Parsing happens in the local `looqlog` process; the browser only shows it.
 
 ```sh
 cargo install looqlog
@@ -14,11 +14,11 @@ and Android logcat prefixes read through the plain-text path. Gives you a histog
 timeline with drag-to-select, a virtual-scrolled table, filter chips, full-text and
 regex search, and a shareable URL that encodes the view.
 
-**Privacy, stated precisely.** In file mode the log is read by the browser's File API
-and never reaches the backend at all — it does not leave the browser. In stdin mode
-lines travel from the CLI process to the browser over a localhost WebSocket, guarded by
-an origin check and a per-process token: it does not leave your machine, but it does
-cross a process boundary. The two modes do not carry the same guarantee.
+**Privacy, stated precisely.** In both modes the log — an argv file, a file uploaded from
+the page, or stdin — is read by the local `looqlog` process and reaches the browser over a
+localhost connection guarded by origin/host checks and a per-process token. It does not
+leave your machine on the default bind, but it does cross a process boundary; nothing
+claims it stays inside the browser.
 
 Full documentation — flags, supported formats, security model, file-size limits and
 known limitations — lives in the repository:

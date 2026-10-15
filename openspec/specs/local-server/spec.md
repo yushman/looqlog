@@ -23,31 +23,17 @@ port, not a panic or a backtrace.
   `--port 0`, with no panic output
 
 ### Requirement: Static assets are served from the binary
-All frontend assets — the HTML page, the JavaScript bundle and `core.wasm` — SHALL be
-embedded into the binary at compile time via `include_bytes!` and served from memory. The
-server SHALL NOT read any asset from the filesystem at runtime, and SHALL serve
-`core.wasm` with `Content-Type: application/wasm`.
+All frontend assets — the HTML page, the JavaScript bundle and the stylesheet — SHALL be embedded
+into the binary at compile time via `include_bytes!` and served from memory. The server SHALL NOT
+read any asset from the filesystem at runtime. No WebAssembly module SHALL be served.
 
 #### Scenario: Page loads with no working directory dependency
 - **WHEN** the binary is copied to an empty directory and run from there
-- **THEN** the page, the JS bundle and `core.wasm` are all served successfully
+- **THEN** the page, the JS bundle and the stylesheet are all served successfully
 
-#### Scenario: WASM content type
-- **WHEN** the browser requests `core.wasm`
-- **THEN** the response carries `Content-Type: application/wasm` so streaming compilation
-  is not rejected
-
-### Requirement: The server never reads the log file
-In file mode the server SHALL NOT open, read, stat for content, or expose any HTTP route
-that returns the contents of the log file named on the command line (ADR-0002).
-
-#### Scenario: No route serves log content
+#### Scenario: No WASM route
 - **WHEN** the full set of registered routes is enumerated
-- **THEN** none of them reads from the filesystem outside the embedded asset set
-
-#### Scenario: Network tab stays empty after load
-- **WHEN** a user opens a log file in the browser after the page has finished loading
-- **THEN** no further HTTP request is issued for the file's contents (US-6)
+- **THEN** none serves a `.wasm` file or a worker script
 
 ### Requirement: Graceful shutdown
 On `SIGINT` (Ctrl+C) the server SHALL stop accepting connections, close open WebSocket

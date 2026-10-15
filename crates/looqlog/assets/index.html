@@ -18,26 +18,17 @@
   <!-- The run mode is stated by the workspace's own topbar row (web/src/components/
        looqlog-workspace.ts), which is per-mode content — a hardcoded "file mode" line
        here was wrong in stdin mode. -->
-  <!-- __LOOQLOG_HINT__ is substituted server-side (crates/looqlog/src/assets.rs,
-       ADR-0007) with already-escaped HTML naming the CLI-supplied path, or left as
-       a generic prompt when no path was given. Kept inside a <template> so the raw
-       markup never executes as part of page load; looqlog-app.ts reads its contents
-       and hands them to <looqlog-drop-target> (this is content, not application logic
-       — the app-shell spec's "no inline application script" is about <script>
-       tags, not server-substituted hint text). -->
-  <template id="hint-template">__LOOQLOG_HINT__</template>
   <!-- __LOOQLOG_MODE__ is substituted server-side (crates/looqlog/src/assets.rs) with a
        small trusted JSON object naming the run mode and, in stdin mode, the
        configured --max-lines: {"mode":"file"} or {"mode":"stdin","maxLines":N}.
        looqlog-app.ts reads it to decide whether to mount the file-mode UI or the
        live-tail UI (live-tail-ui spec). In `vite dev` (no backend), this stays the
-       literal placeholder string, which looqlog-app.ts treats as file mode — same
-       convention as __LOOQLOG_HINT__ above. -->
+       literal placeholder string, which looqlog-app.ts treats as file mode. -->
   <template id="mode-template">__LOOQLOG_MODE__</template>
   <!-- __LOOQLOG_TOKEN__ is substituted server-side (crates/looqlog/src/assets.rs,
        `security` spec, design.md D1) with a random per-process hex token. Read by
-       web/src/token.ts and presented as the first message on `/ws`, never placed in
-       the WebSocket URL/query string. In `vite dev` (no backend) this stays the
+       web/src/token.ts and presented as the first message on `/ws` and in the
+       `/upload` header, never placed in a URL. In `vite dev` (no backend) this stays the
        literal placeholder, which is treated as "no token" — `/ws` isn't reachable
        under `vite dev` anyway (there's no backend process to serve it). -->
   <template id="token-template">__LOOQLOG_TOKEN__</template>

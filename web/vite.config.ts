@@ -18,14 +18,6 @@ export default defineConfig({
       },
     },
   },
-  worker: {
-    format: "es",
-    rollupOptions: {
-      output: {
-        entryFileNames: "assets/[name].js",
-      },
-    },
-  },
   test: {
     // Vitest stubs CSS imports to an empty string by default, `?raw` included.
     // `entry-table-styles.test.ts` reads `style.css` as text to assert that the

@@ -6,14 +6,13 @@ use clap::Parser;
 
 /// looqlog — a single-binary CLI that opens a local web UI for a log file or stdin.
 ///
-/// File mode: `looqlog app.log` prints `app.log` as a hint of which file to open in the
-/// browser; the file is picked and parsed entirely client-side (ADR-0002, ADR-0007).
-/// Stdin mode: `myapp | looqlog` streams stdin lines to connected browsers over `/ws`.
+/// File mode: `looqlog app.log` reads and parses `app.log` and shows it in the browser;
+/// another file can be uploaded from the page (ADR-0010).
+/// Stdin mode: `myapp | looqlog` parses stdin as it arrives and serves it live over `/ws`.
 #[derive(Parser, Debug)]
 #[command(name = "looqlog", version, about, disable_help_subcommand = true)]
 pub struct Cli {
-    /// Log file to open in the browser. This process never opens or reads it in file
-    /// mode (ADR-0002, ADR-0007) — it is shown in the page as a hint only.
+    /// Log file to open. Read once at startup by this process, not followed (ADR-0010).
     pub path: Option<PathBuf>,
 
     /// Port to bind (0 = ask the OS for a free port).
@@ -21,8 +20,8 @@ pub struct Cli {
     pub port: u16,
 
     /// Bind address. Anything other than 127.0.0.1 prints a mandatory exposure
-    /// warning (ADR-0003): live stdin logs would become reachable from the network
-    /// without authentication.
+    /// warning (ADR-0003): log contents — files and stdin — would become reachable
+    /// from the network.
     #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
 
@@ -38,10 +37,8 @@ pub struct Cli {
     #[arg(long)]
     pub stdin: bool,
 
-    /// Max lines kept for live tail. Stdin mode only in this change — the ring
-    /// buffer that will honor it lands in the `live-tail` change; here it is parsed
-    /// and reported, and if given in file mode a note is printed since it has no
-    /// effect there.
+    /// Max lines kept for live tail (stdin mode only; the oldest are evicted). Given in
+    /// file mode it has no effect and a note says so.
     #[arg(long)]
     pub max_lines: Option<usize>,
 }

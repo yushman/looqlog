@@ -5,9 +5,9 @@ into a published crate that builds without a JavaScript toolchain (ADR-0008).
 ## Requirements
 ### Requirement: Building the binary requires no JavaScript toolchain
 `cargo build` and `cargo install looqlog` SHALL succeed on a machine with only a Rust
-toolchain — no Node.js, no npm, no `wasm-pack`, no network access beyond crates.io. The
-compiled frontend artifacts SHALL therefore be committed to the repository and included in
-the published crate (ADR-0008).
+toolchain — no Node.js, no npm, no network access beyond crates.io. The compiled frontend
+artifacts (JS bundle and stylesheet) SHALL therefore be committed to the repository and included
+in the published crate (ADR-0008). No WebAssembly artifact SHALL be built or vendored.
 
 #### Scenario: Node-less build
 - **WHEN** `cargo build --release` runs in a container with a Rust toolchain and no Node.js
@@ -15,7 +15,7 @@ the published crate (ADR-0008).
 
 #### Scenario: Published crate carries the artifacts
 - **WHEN** `cargo package --list` is inspected
-- **THEN** the JS bundle and `core.wasm` appear in the file list
+- **THEN** the JS bundle and the stylesheet appear in the file list and no `.wasm` file does
 
 ### Requirement: Vendored artifacts are verifiably current
 The repository SHALL provide a single documented command that rebuilds the frontend
@@ -42,21 +42,16 @@ the failure output.
   failures
 
 #### Scenario: A toolchain release does not fail an unrelated change
-- **WHEN** a new stable release of the Rust toolchain or of `wasm-pack` becomes available and someone
-  pushes a change that does not touch the frontend
+- **WHEN** a new release of Node.js or of a pinned frontend build tool becomes available and
+  someone pushes a change that does not touch the frontend
 - **THEN** the check still runs against the pinned versions and passes, rather than reporting drift
   attributable to the push
 
 #### Scenario: Local rebuild on the wrong toolchain says so
-- **WHEN** the rebuild command runs on a machine whose Rust toolchain or `wasm-opt` differs from the
-  pinned version
+- **WHEN** the rebuild command runs on a machine whose Node.js or pinned frontend build tool
+  differs from the pinned version
 - **THEN** it warns, naming the version it found, the version expected, and that the resulting
   artifacts will fail the CI check
-
-#### Scenario: Dependency resolution cannot change the artifact silently
-- **WHEN** the rebuild command runs with a `Cargo.lock` that would need updating
-- **THEN** the build fails rather than resolving to different dependency versions and producing a
-  different artifact
 
 #### Scenario: A failing check preserves the rejected bytes
 - **WHEN** the CI check finds the committed artifacts and the rebuilt artifacts differ
@@ -79,8 +74,8 @@ discovery, and SHALL therefore fail the release rather than be published unnotic
 
 #### Scenario: Size is recorded
 - **WHEN** a release build is produced
-- **THEN** the binary size for each target, and the WASM and bundle sizes, are recorded alongside
-  the budget in the published release, not only in a transient build log
+- **THEN** the binary size for each target, and the bundle size, are recorded alongside the budget
+  in the published release, not only in a transient build log
 
 #### Scenario: Budget miss is deliberate
 - **WHEN** a binary exceeds the budget
@@ -97,7 +92,7 @@ produces, and SHALL be the same set of checks for every target.
 #### Scenario: Clean-machine run
 - **WHEN** the freshly built binary is run on a machine that has never built this project
 - **THEN** it reports the expected version, its help output names every CLI flag, its server binds
-  and serves both the page and the embedded WASM, and a line supplied on stdin reaches a connected
+  and serves the page, and a line supplied on stdin becomes queryable by an authenticated
   WebSocket client
 
 #### Scenario: Environment-dependent failure is caught before release

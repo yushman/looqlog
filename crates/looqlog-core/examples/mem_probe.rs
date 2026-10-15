@@ -7,10 +7,52 @@
 //! Usage:
 //!   cargo run -p looqlog-core --release --example mem_probe -- diagnostics 1000000
 //!   cargo run -p looqlog-core --release --example mem_probe -- fields 1000000
-//! Wrap with `/usr/bin/time -l` (macOS) to capture peak RSS.
+//!   cargo run -p looqlog-core --release --example mem_probe -- session 64
+//! Wrap with `/usr/bin/time -l` (macOS) to capture peak RSS. `session` reports the live
+//! heap a `Session` retains per MiB of ingested input, per format (ADR-0010 size cap).
+
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use looqlog_core::diagnostics::{DiagnosticReason, Diagnostics};
 use looqlog_core::fields::FieldInventory;
+use looqlog_core::session::{Session, SessionConfig};
+
+struct Counting;
+
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        LIVE.fetch_add(layout.size(), Ordering::Relaxed);
+        System.alloc(layout)
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
+        System.dealloc(ptr, layout)
+    }
+}
+
+#[global_allocator]
+static ALLOC: Counting = Counting;
+
+fn session_line(format: &str, i: usize) -> String {
+    let levels = ["INFO", "DEBUG", "WARN", "ERROR"];
+    let services = ["api", "db", "worker", "auth", "cache"];
+    let (level, service, ts) = (levels[i % 4], services[i % 5], 1_754_668_800 + i as i64);
+    match format {
+        "json" => format!(
+            "{{\"timestamp\":\"{ts}\",\"level\":\"{level}\",\"service\":\"{service}\",\"message\":\"request completed\",\"seq\":{i},\"request_id\":\"req-{i:06}\"}}\n"
+        ),
+        "logfmt" => format!(
+            "ts={ts} level={level} service={service} msg=\"request completed\" seq={i} request_id=req-{i:06}\n"
+        ),
+        _ => format!(
+            "{} {service} {level} request completed (seq {i})\n",
+            chrono::DateTime::from_timestamp(ts, 0).unwrap().to_rfc3339()
+        ),
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -50,6 +92,32 @@ fn main() {
                 stats.high_cardinality
             );
         }
-        other => panic!("unknown mode {other}, expected 'diagnostics' or 'fields'"),
+        "session" => {
+            let mib = n.min(4096);
+            for format in ["json", "logfmt", "plain"] {
+                let before = LIVE.load(Ordering::Relaxed);
+                let mut session = Session::new(SessionConfig::default());
+                let (mut bytes, mut i, mut chunk) = (0usize, 0usize, String::new());
+                while bytes < mib << 20 {
+                    chunk.push_str(&session_line(format, i));
+                    i += 1;
+                    if chunk.len() >= 64 * 1024 {
+                        bytes += chunk.len();
+                        session.ingest(chunk.as_bytes());
+                        chunk.clear();
+                    }
+                }
+                session.finish();
+                let retained = LIVE.load(Ordering::Relaxed) - before;
+                println!(
+                    "session {format}: {mib} MiB in, {} entries, {} raw bytes, heap {} bytes = {:.2} bytes per input byte",
+                    session.total(),
+                    session.retained_raw_bytes(),
+                    retained,
+                    retained as f64 / bytes as f64
+                );
+            }
+        }
+        other => panic!("unknown mode {other}, expected 'diagnostics', 'fields' or 'session'"),
     }
 }

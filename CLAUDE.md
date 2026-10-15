@@ -1,8 +1,9 @@
 # looqlog
 
 Single-binary Rust CLI that opens a local web UI for a log file or a live stdin
-stream. Parsing happens in WebAssembly inside the user's browser — privacy first,
-zero config, no runtime dependencies.
+stream. Parsing, indexing and search run natively in the local `looqlog` process; the
+browser is a thin client — privacy first (nothing leaves the machine), zero config, no
+runtime dependencies.
 
 Read [docs/adr/](docs/adr/) before changing anything — it explains why the
 architecture is the way it is.
@@ -21,40 +22,42 @@ worse than none, because it documents behavior the tool no longer has.
 
 ```
 CLI (axum + tokio, 127.0.0.1:PORT)
-  ├── HTTP: serves index.html + TS bundle + core.wasm (include_bytes!, embedded)
-  ├── WebSocket /ws: stdin ring buffer → snapshot-on-connect → live stream (ADR-0004)
-  └── never reads the log file itself in file mode (ADR-0002)
+  ├── HTTP: serves index.html + TS bundle + stylesheet (include_bytes!, embedded)
+  ├── POST /upload: picked/dropped file streamed into the session (token + Origin/Host)
+  ├── reads the argv file at startup; stdin parsed as it arrives, ring buffer (ADR-0004)
+  ├── Session (looqlog-core, target-agnostic, ADR-0005): detect, parse, index,
+  │   filter, search, timeline buckets (ADR-0010)
+  └── WebSocket /ws: token handshake → queries/windows/buckets + coalesced notifications
         ↓
-Browser (TypeScript + WASM)
-  ├── File API: file stays in browser memory, never sent to the backend
-  ├── WASM core (looqlog-core, target-agnostic, ADR-0005): format detect, parse, index
-  └── UI: timeline (uPlot), virtual-scrolled table, filters, search
+Browser (TypeScript, thin client)
+  └── UI: timeline (uPlot), virtual-scrolled table, filters, search — renders only the
+      rows on screen, pulled from the backend
 ```
 
 Key constraints, each with an ADR:
 - Web UI over a local server, not a TUI — [ADR-0001](docs/adr/0001-web-ui-over-local-server-not-tui.md)
-- File-mode parsing is WASM-only; backend never reads the file — [ADR-0002](docs/adr/0002-wasm-browser-parsing-file-mode.md)
+- File-mode parsing was WASM-only; superseded by ADR-0010 — [ADR-0002](docs/adr/0002-wasm-browser-parsing-file-mode.md)
 - Bind to `127.0.0.1` by default, `--host` is an explicit, warned opt-in — [ADR-0003](docs/adr/0003-bind-127-0-0-1-by-default.md)
 - stdin buffering is a bounded ring buffer with snapshot-on-connect — [ADR-0004](docs/adr/0004-ring-buffer-stdin-snapshot.md)
-- Core parser crate is target-agnostic (wasm + native adapters), MCP transport is `rmcp` — [ADR-0005](docs/adr/0005-target-agnostic-core-crate-rmcp.md)
+- Core parser crate is target-agnostic (native today, MCP adapter later), MCP transport is `rmcp` — [ADR-0005](docs/adr/0005-target-agnostic-core-crate-rmcp.md)
 - The project, binary and crate were originally named `looq`, superseded by ADR-0009 — [ADR-0006](docs/adr/0006-project-named-looq.md)
+- The argv path was a hint, not an auto-loaded file; superseded by ADR-0010 — [ADR-0007](docs/adr/0007-argv-path-is-a-hint-not-an-auto-loaded-file.md)
 - The project, binary and every crate are named `looqlog` — [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)
+- Parse on the backend; the browser is a thin client — [ADR-0010](docs/adr/0010-parse-on-the-backend-thin-client.md)
 
-**Privacy asymmetry to keep straight:** file mode never leaves the browser;
-stdin/live-tail mode goes over a localhost WebSocket in the clear, so it "does not leave
-the machine" but does cross a process boundary. The `/ws` origin check and per-process
-token (`security` spec) guard that socket against another page in the same browser, not
-against another process on the machine — and neither protects a non-loopback `--host`
-(ADR-0003). Do not describe both modes with the same guarantee in UI copy or docs:
-"never leaves your machine" holds for both, "never leaves your browser" only for file
-mode.
+**Privacy guarantee to keep straight:** every mode — argv file, uploaded file, stdin — is
+read by the local `looqlog` process and reaches the browser over a localhost WebSocket in
+the clear, so log contents "never leave your machine" but do cross a process boundary
+(ADR-0010). The origin/host checks and per-process token (`security` spec) guard `/ws` and
+`/upload` against another page in the same browser, not against another process on the
+machine — and none of them protects a non-loopback `--host` (ADR-0003). Never write "never
+leaves your browser" in UI copy or docs; it is no longer true for any mode.
 
 ## Stack
 
 - Backend: Rust 1.86+, `axum` 0.8, `tokio`, `clap`, `tracing`
-- Core parser (`looqlog-core`): target-agnostic Rust lib crate, no `wasm-bindgen`/`web-sys`
-- WASM adapter: `wasm-bindgen`, `serde-wasm-bindgen`, built via `wasm-pack`
-- Frontend: TypeScript (strict), Vite, Web Components, `uPlot`, `comlink`
+- Core engine (`looqlog-core`): target-agnostic Rust lib crate, no I/O, no async
+- Frontend: TypeScript (strict), Vite, Web Components, `uPlot`
 - MCP (P2): `rmcp` SDK, native adapter over `looqlog-core`
 
 ## Testing
@@ -66,12 +69,12 @@ rather than loud (see ADR-0004):
   dropped or crash the parser.
 - Auto-detect misclassifying a format (e.g. plain text detected as logfmt) should be
   visible/overridable (`#format=`), not a silent wrong parse.
-- Ring buffer drop-under-backpressure must surface as a "gap" indicator in the UI —
+- Ring buffer eviction must surface as an "N oldest lines evicted" marker in the UI —
   a silently shortened live tail looks like "nothing happened" to the user.
 - `--host` != `127.0.0.1` must always print the exposure warning — a missed warning
   is a silent privacy regression.
-- WASM parse/filter latency regressions are easy to introduce
-  silently; benchmark before merging changes to `looqlog-core`'s hot paths.
+- Parse/filter latency regressions are easy to introduce silently; run `cargo bench`
+  on `looqlog-core` before merging changes to its hot paths.
 
 ## Spec-driven workflow (OpenSpec) — required
 

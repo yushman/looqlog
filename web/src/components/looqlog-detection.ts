@@ -9,7 +9,7 @@
 // section by itself the first time it happens — collapsing saves space, it never
 // hides the warning.
 
-import type { DetectionResultDto, TimestampShapeKey } from "../wasm-types";
+import type { DetectionResultDto, TimestampShapeKey } from "../query-types";
 import { dispatchRailAttention } from "./looqlog-workspace";
 
 /** Human-readable names for the timestamp shapes the plain-text prefix scanner

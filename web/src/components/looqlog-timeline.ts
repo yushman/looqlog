@@ -1,15 +1,15 @@
 // Count-per-bucket histogram (`timeline` spec, design.md D3/D4/D5/D8). Owns its own
-// `uPlot` instance; takes an `EntryIndex` reference and re-derives everything else
-// (span, bucket width, counts) from it on `render()`. Emits `range-change` when the
+// `uPlot` instance; the span, bucket width and counts come from the backend's
+// `buckets` reply (ADR-0010) on every `refresh()`. Emits `range-change` when the
 // user drags a selection or clears it; never holds the active range itself past
 // reflecting what the shell sets via `setActiveRange` (D7 — range is shell state).
 
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 
-import type { EntryIndex, RobustSpan } from "../entry-index";
-import { bucketCountForSpan, pickBucketWidthMs } from "../timeline-bucket";
+import type { BucketsReplyDto } from "../query-types";
 import type { TimeRange } from "../time-range";
+import type { ViewSession } from "../view-session";
 
 /** uPlot sizes itself from this, so the CSS `min-height` alone cannot shrink the
  * chart — the two are kept in step (task 9.4). */
@@ -53,7 +53,8 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 export class LooqlogTimeline extends HTMLElement {
-  private index: EntryIndex | null = null;
+  private session: ViewSession | null = null;
+  private fetchSeq = 0;
   private plot: uPlot | null = null;
   private activeRange: TimeRange | null = null;
   private showingFullSpan = false;
@@ -103,15 +104,14 @@ export class LooqlogTimeline extends HTMLElement {
     });
   }
 
-  setIndex(index: EntryIndex): void {
-    this.index = index;
+  setSource(session: ViewSession | null): void {
+    this.session = session;
     this.showingFullSpan = false;
     this.render();
   }
 
-  /** Called after live growth/eviction. The caller is responsible for throttling
-   * (design.md D8 — "on an interval, not per entry"); this method itself always
-   * does a full recompute so it stays correct whenever it's called. */
+  /** Called after a query change and after live growth/eviction. The caller throttles
+   * (design.md D8 — "on an interval, not per entry"). */
   refresh(): void {
     this.render();
   }
@@ -159,68 +159,55 @@ export class LooqlogTimeline extends HTMLElement {
   }
 
   private render(): void {
-    if (!this.index) {
+    const session = this.session;
+    if (!session) {
       return;
     }
-    const timestamplessCount = this.index.timestamplessCount;
-    const timestampedCount = this.index.timestampedCount;
+    const seq = ++this.fetchSeq;
+    session
+      .buckets(this.showingFullSpan)
+      .then((reply) => {
+        if (reply && seq === this.fetchSeq) {
+          this.draw(reply);
+        }
+      })
+      .catch(() => undefined);
+  }
 
-    if (timestampedCount === 0) {
+  private draw(reply: BucketsReplyDto): void {
+    const { timestamped, timestampless, startMs, bucketMs } = reply;
+    if (timestamped === 0 || startMs === null) {
       this.destroyPlot();
       this.chartEl.replaceChildren();
       this.outlierEl.hidden = true;
       this.summaryEl.textContent =
-        timestamplessCount > 0
-          ? `No entries have a usable timestamp (${timestamplessCount} total) — ` +
+        timestampless > 0
+          ? `No entries have a usable timestamp (${timestampless} total) — ` +
             `nothing to place on a time axis.`
           : "No entries yet.";
       return;
     }
-
-    const full = this.index.fullSpan()!;
-    const robust: RobustSpan = this.showingFullSpan
-      ? { minMs: full.minMs, maxMs: full.maxMs, outlierCount: 0 }
-      : (this.index.robustSpan() ?? { minMs: full.minMs, maxMs: full.maxMs, outlierCount: 0 });
-
-    let { minMs, maxMs } = robust;
-    if (maxMs === minMs) {
-      // Degenerate single-instant span: pad so a bucket has non-zero width.
-      minMs -= 500;
-      maxMs += 500;
-    }
-    const spanMs = maxMs - minMs;
-
-    const bucketWidthMs = pickBucketWidthMs(spanMs);
-    const bucketCount = bucketCountForSpan(spanMs, bucketWidthMs);
-    // Align the bucket grid to a round multiple of its own width, so boundaries
-    // land on clean marks (e.g. a 5s bucket starts on :00/:05) instead of at the
-    // dataset's arbitrary first timestamp.
-    const startMs = Math.floor(minMs / bucketWidthMs) * bucketWidthMs;
-    // D6 (`timeline` spec, MODIFIED "Count-per-bucket histogram"): two series —
-    // `total` ignores the active predicate entirely (background, "the dataset's
-    // shape"), `filtered` respects it (foreground). Identical arrays when no
-    // predicate is active, which is exactly the old single-series look.
-    const totalCounts = this.index.bucketCountsUnfiltered(startMs, bucketWidthMs, bucketCount);
-    const filteredCounts = this.index.bucketCounts(startMs, bucketWidthMs, bucketCount);
-
+    const bucketCount = reply.total.length;
     const xs = new Array<number>(bucketCount);
     for (let i = 0; i < bucketCount; i++) {
-      xs[i] = (startMs + i * bucketWidthMs) / 1000; // uPlot x values, seconds
+      xs[i] = (startMs + i * bucketMs) / 1000; // uPlot x values, seconds
     }
-    const data: uPlot.AlignedData = [xs, totalCounts, filteredCounts];
+    // D6: `total` ignores filters (background, "the dataset's shape"), `filtered`
+    // respects them (foreground).
+    const data: uPlot.AlignedData = [xs, reply.total, reply.filtered];
 
-    this.drawPlot(data, bucketWidthMs);
+    this.drawPlot(data, bucketMs);
 
-    const total = timestampedCount + timestamplessCount;
+    const total = timestamped + timestampless;
     this.summaryEl.textContent =
-      `${formatSpanLabel(startMs)} → ${formatSpanLabel(startMs + bucketCount * bucketWidthMs)} ` +
-      `(bucket ${describeBucket(bucketWidthMs)}, UTC)` +
-      (timestamplessCount > 0 ? ` — ${timestamplessCount} of ${total} entries have no timestamp` : "");
+      `${formatSpanLabel(startMs)} → ${formatSpanLabel(startMs + bucketCount * bucketMs)} ` +
+      `(bucket ${describeBucket(bucketMs)}, UTC)` +
+      (timestampless > 0 ? ` — ${timestampless} of ${total} entries have no timestamp` : "");
 
-    if (robust.outlierCount > 0) {
+    if (reply.outlierCount > 0) {
       this.outlierEl.hidden = false;
       (this.querySelector("#outlier-text") as HTMLSpanElement).textContent =
-        `${robust.outlierCount} entr${robust.outlierCount === 1 ? "y" : "ies"} ` +
+        `${reply.outlierCount} entr${reply.outlierCount === 1 ? "y" : "ies"} ` +
         `fall outside the shown range and would compress it if included.`;
     } else {
       this.outlierEl.hidden = true;
