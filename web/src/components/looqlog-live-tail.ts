@@ -5,6 +5,7 @@
 // `ViewController`. It owns the active range like `looqlog-app.ts` does, through the
 // controller, rather than wiring the timeline and table to each other.
 
+import { newSincePause, resumeLabel } from "../resume-label";
 import "./looqlog-detection";
 import "./looqlog-diagnostics";
 import "./looqlog-timeline";
@@ -56,6 +57,8 @@ export class LooqlogLiveTail extends HTMLElement {
   private rateTimer: ReturnType<typeof setInterval> | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private following = true;
+  /** `total + evicted` when following stopped; null while following. */
+  private seenAtPause: number | null = null;
   private connected = false;
   /** Set by a `grown`/`evicted`, cleared by the next table/timeline tick. */
   private tableDirty = false;
@@ -328,9 +331,13 @@ export class LooqlogLiveTail extends HTMLElement {
     this.stateEl.className = `conn-indicator conn-${state}`;
   }
 
+  private seenTotal(): number {
+    return this.controller.session.counts.total + this.evicted;
+  }
+
   /** Lines/sec from the cumulative counts: retained entries plus evicted lines. */
   private tickRate(): void {
-    const seen = this.controller.session.counts.total + this.evicted;
+    const seen = this.seenTotal();
     const n = this.lastRateCount === null ? 0 : Math.max(0, seen - this.lastRateCount);
     this.lastRateCount = seen;
     this.rateEl.textContent = `${n} lines/sec`;
@@ -345,6 +352,7 @@ export class LooqlogLiveTail extends HTMLElement {
       this.tableEl.scrollToBottom();
     } else {
       this.tableEl.refresh();
+      this.updateAutoscrollControls();
     }
   }
 
@@ -362,12 +370,14 @@ export class LooqlogLiveTail extends HTMLElement {
       this.resumeFollowing();
     } else if (!atBottom && this.following) {
       this.following = false;
+      this.seenAtPause = this.seenTotal();
       this.updateAutoscrollControls();
     }
   }
 
   private resumeFollowing(): void {
     this.following = true;
+    this.seenAtPause = null;
     this.updateAutoscrollControls();
     this.tableEl.scrollToBottom();
   }
@@ -379,7 +389,8 @@ export class LooqlogLiveTail extends HTMLElement {
       return;
     }
     controls.hidden = false;
-    this.resumeBtn.textContent = "Resume following";
+    const added = this.seenAtPause === null ? 0 : newSincePause(this.seenTotal(), this.seenAtPause);
+    this.resumeBtn.textContent = resumeLabel(added);
   }
 }
 

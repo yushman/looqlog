@@ -140,6 +140,11 @@ holds only the rows on screen; parsing, retention and querying are the backend's
 - Renders are batched: table 80 ms, timeline 500 ms, stats 1 s.
 - The view follows the tail while within 24 px of the bottom; scrolling away pauses it and shows
   "Resume following"; the button or returning to the bottom resumes.
+- While paused, the button reads `Resume following · <n> new` (thousands separated, `12,408`), plain
+  `Resume following` at zero. n is the growth of cumulative total plus evicted since the pause,
+  clamped at 0, so it stays correct under eviction and a reset or reconnect cannot make it negative.
+  It counts all arrived lines, not only filter-matched ones. It refreshes on the 80 ms table tick
+  and restarts from 0 on each pause.
 - The page retains no entries beyond the rows it renders; the count shows the backend's retained
   total and eviction shows as the marker.
 - The stream's detected format can be overridden the same way as in file mode: `#format=` and `#tz=`
