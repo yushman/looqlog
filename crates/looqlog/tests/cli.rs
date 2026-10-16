@@ -1220,6 +1220,7 @@ async fn close_over_http_is_checked_and_refuses_stdin() {
     let _ = child.wait();
 }
 
+#[cfg(target_os = "macos")]
 fn fixture_path() -> String {
     format!(
         "{}/../../tests/fixtures/sample.jsonl",
