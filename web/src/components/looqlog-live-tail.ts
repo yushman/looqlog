@@ -75,6 +75,7 @@ export class LooqlogLiveTail extends HTMLElement {
    * from the hash; everything else is written, never read. */
   private formatOverride: string | null = null;
   private tzOffsetMinutes: number | null = null;
+  private tzName: string | null = null;
   private overrideApplied = false;
   private columnWidths: ColumnWidths = DEFAULT_COLUMN_WIDTHS;
   private collapsedPanes: Set<CollapsiblePane> = new Set();
@@ -96,6 +97,7 @@ export class LooqlogLiveTail extends HTMLElement {
     const override = formatOverrideFromHash(location.hash);
     this.formatOverride = override?.formatOverride ?? null;
     this.tzOffsetMinutes = override?.tzOffsetMinutes ?? null;
+    this.tzName = override?.tzName ?? null;
     this.innerHTML = `<looqlog-workspace></looqlog-workspace>`;
     const ws = this.querySelector("looqlog-workspace") as LooqlogWorkspace;
     this.workspace = ws;
@@ -235,7 +237,7 @@ export class LooqlogLiveTail extends HTMLElement {
     this.connected = true;
     if (!this.overrideApplied) {
       this.overrideApplied = true;
-      if (this.formatOverride !== null || this.tzOffsetMinutes !== null) {
+      if (this.formatOverride !== null || this.tzOffsetMinutes !== null || this.tzName !== null) {
         await this.applyFormatOverride();
       }
     }
@@ -291,7 +293,7 @@ export class LooqlogLiveTail extends HTMLElement {
 
   private async applyFormatOverride(): Promise<void> {
     try {
-      await this.controller.session.setFormat(this.formatOverride, this.tzOffsetMinutes);
+      await this.controller.session.setFormat(this.formatOverride, this.tzOffsetMinutes, this.tzName);
     } catch (err) {
       this.errorEl.hidden = false;
       this.errorEl.textContent = `could not apply the format override: ${err instanceof Error ? err.message : String(err)}`;
@@ -305,6 +307,7 @@ export class LooqlogLiveTail extends HTMLElement {
       query: this.filterBarEl?.getState().queryText ?? "",
       formatOverride: this.formatOverride,
       tzOffsetMinutes: this.tzOffsetMinutes,
+      tzName: this.tzName,
       columnWidths: this.columnWidths,
       collapsedPanes: this.collapsedPanes,
     });

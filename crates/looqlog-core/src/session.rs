@@ -121,10 +121,18 @@ impl View {
     }
 }
 
+/// How offset-less timestamps are read when the caller overrides the default (UTC):
+/// a fixed offset in minutes east of UTC, or an IANA zone name such as `Europe/Berlin`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TzOverride {
+    OffsetMinutes(i32),
+    Name(String),
+}
+
 pub struct Session {
     config: SessionConfig,
     format_override: Option<Format>,
-    tz_offset_minutes: Option<i32>,
+    tz: Option<TzOverride>,
     parser: Parser,
     index: EntryIndex,
     raw: VecDeque<Box<[u8]>>,
@@ -148,7 +156,7 @@ impl Session {
         Self {
             config,
             format_override: None,
-            tz_offset_minutes: None,
+            tz: None,
             parser,
             index: EntryIndex::new(),
             raw: VecDeque::new(),
@@ -240,17 +248,17 @@ impl Session {
     }
 
     /// Re-parses the retained lines with `format` (detection when `None`) and an
-    /// optional fixed UTC offset for timestamps that carry none. Applies to lines
+    /// optional fixed UTC offset or IANA zone for timestamps that carry none. Applies to lines
     /// ingested afterwards too. Every view rebuilds on its next call.
     pub fn set_format(
         &mut self,
         format: Option<Format>,
-        tz_offset_minutes: Option<i32>,
+        tz: Option<TzOverride>,
     ) -> Result<StatsDto, String> {
         let mut parser =
-            new_parser(&self.config, format, tz_offset_minutes)?.starting_at_line(self.first_line);
+            new_parser(&self.config, format, tz.as_ref())?.starting_at_line(self.first_line);
         self.format_override = format;
-        self.tz_offset_minutes = tz_offset_minutes;
+        self.tz = tz;
         let mut index = EntryIndex::new();
         let mut buf = Vec::with_capacity(REPARSE_CHUNK_BYTES);
         for line in &self.raw {
@@ -282,8 +290,8 @@ impl Session {
         self.format_override
     }
 
-    pub fn tz_offset_minutes(&self) -> Option<i32> {
-        self.tz_offset_minutes
+    pub fn tz_override(&self) -> Option<&TzOverride> {
+        self.tz.as_ref()
     }
 
     pub fn epoch(&self) -> u64 {
@@ -620,15 +628,19 @@ impl Session {
 fn new_parser(
     config: &SessionConfig,
     format: Option<Format>,
-    tz_offset_minutes: Option<i32>,
+    tz: Option<&TzOverride>,
 ) -> Result<Parser, String> {
-    let tz = match tz_offset_minutes {
+    let tz = match tz {
         None => TimeZonePolicy::utc(),
-        Some(minutes) => minutes
+        Some(TzOverride::OffsetMinutes(minutes)) => minutes
             .checked_mul(60)
             .and_then(FixedOffset::east_opt)
             .map(TimeZonePolicy::fixed_offset)
             .ok_or_else(|| format!("timezone offset out of range: {minutes} minutes"))?,
+        Some(TzOverride::Name(name)) => name
+            .parse::<chrono_tz::Tz>()
+            .map(TimeZonePolicy::named)
+            .map_err(|_| format!("unknown time zone: {name}"))?,
     };
     let mut ctx = ParseContext::new(tz);
     if let Some(reference) = config.reference {
@@ -973,14 +985,57 @@ mod tests {
     #[test]
     fn timezone_override_applies_to_offsetless_timestamps() {
         let mut s = session("{\"ts\":\"2026-08-09T10:00:00\",\"msg\":\"a\"}\n");
-        s.set_format(None, Some(120)).unwrap();
+        s.set_format(None, Some(TzOverride::OffsetMinutes(120)))
+            .unwrap();
         let mut v = View::new();
         let w = s.window(&mut v, 0, 1);
         assert_eq!(
             w.rows[0].timestamp.as_deref(),
             Some("2026-08-09T08:00:00+00:00")
         );
-        assert!(s.set_format(None, Some(100_000)).is_err());
+        assert!(s
+            .set_format(None, Some(TzOverride::OffsetMinutes(100_000)))
+            .is_err());
+    }
+
+    #[test]
+    fn named_timezone_override_applies_per_line_dst() {
+        let mut s = session(
+            "{\"ts\":\"2026-07-01T12:00:00\",\"msg\":\"a\"}\n{\"ts\":\"2026-01-01T12:00:00\",\"msg\":\"b\"}\n",
+        );
+        s.set_format(None, Some(TzOverride::Name("Europe/Berlin".into())))
+            .unwrap();
+        let mut v = View::new();
+        let w = s.window(&mut v, 0, 2);
+        assert_eq!(
+            w.rows[0].timestamp.as_deref(),
+            Some("2026-07-01T10:00:00+00:00")
+        );
+        assert_eq!(
+            w.rows[1].timestamp.as_deref(),
+            Some("2026-01-01T11:00:00+00:00")
+        );
+        assert_eq!(
+            s.tz_override(),
+            Some(&TzOverride::Name("Europe/Berlin".into()))
+        );
+    }
+
+    #[test]
+    fn unknown_time_zone_name_is_rejected() {
+        let mut s = session("{\"ts\":\"2026-08-09T10:00:00\",\"msg\":\"a\"}\n");
+        s.set_format(None, Some(TzOverride::OffsetMinutes(120)))
+            .unwrap();
+        let err = s
+            .set_format(None, Some(TzOverride::Name("Europe/Moskow".into())))
+            .unwrap_err();
+        assert_eq!(err, "unknown time zone: Europe/Moskow");
+        assert_eq!(s.tz_override(), Some(&TzOverride::OffsetMinutes(120)));
+        let mut v = View::new();
+        assert_eq!(
+            s.window(&mut v, 0, 1).rows[0].timestamp.as_deref(),
+            Some("2026-08-09T08:00:00+00:00")
+        );
     }
 
     #[test]

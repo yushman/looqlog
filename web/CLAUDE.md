@@ -151,16 +151,22 @@ holds only the rows on screen; parsing, retention and querying are the backend's
   in the URL hash apply in stdin mode. The override is sent as `set_format` once, on the first connect,
   before stats and the first query, and never re-sent on reconnect: the session already holds it. Other
   tabs on the source get the `reset` notification.
-- An override the backend rejects (e.g. an unknown format) shows its error in the visible error note; the
-  stream keeps loading under detection. `format` is not validated client-side.
+- An override the backend rejects (e.g. an unknown format or time zone) shows its error in the visible
+  error note; the stream keeps loading under detection. `format` and zone names are not validated
+  client-side.
 - The applied override is written back into the hash, so it survives state changes and copy-link.
 
 ## URL hash
 - The fragment is `URLSearchParams`: `range=<startMs>,<endMs>`, repeated `filter=<field>=<value>`,
-  `q=<text>`, `format=json|logfmt|plain`, `tz=<minutes east>` (an integer with absolute value at most
-  1440; anything else is dropped without a notice), `cols=<#>,<timestamp>,<level>` (rem, only when not
-  default), `panes=rail|detail|rail+detail` (the collapsed panes, absent when none; `+`, `,` and spaces
-  all separate).
+  `q=<text>`, `format=json|logfmt|plain`, `tz=<minutes east | IANA name>`,
+  `cols=<#>,<timestamp>,<level>` (rem, only when not default), `panes=rail|detail|rail+detail` (the
+  collapsed panes, absent when none; `+`, `,` and spaces all separate).
+- `tz` is an integer with absolute value below 1440 (sent as `tzOffsetMinutes`), or a token matching
+  `^[A-Za-z][A-Za-z0-9_+\-/]*$` (sent as `tzName`, e.g. `Europe/Moscow`); anything else (`1440`,
+  `1.5`, `+03:00`) is dropped without a notice. Spaces in the value turn back into `+` first, so a
+  hand-typed `Etc/GMT+3` survives `URLSearchParams`. Names are not validated client-side: an unknown
+  one shows the backend's `could not apply the format override: unknown time zone: <name>` in the
+  visible error note. At most one of the two is set, and it is written back verbatim.
 - Written with `history.replaceState`, debounced, so typing does not grow history.
 - On load in file mode: panes apply at once; a format or timezone override is sent as `set_format`
   before the first query; range, filters (checked against the field inventory) and query form the first

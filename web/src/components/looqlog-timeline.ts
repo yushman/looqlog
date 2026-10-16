@@ -22,8 +22,8 @@ function pad2(n: number): string {
 
 /** Ticks are formatted from the bucket width, not a fixed calendar unit, so a
  * five-second bucket shows seconds and a thirty-day bucket shows dates — always in
- * UTC, matching the table's stated timezone (log-parsing-core only supports UTC or
- * a fixed offset, both normalised to UTC by the time entries reach the browser). */
+ * UTC, matching the table's stated timezone (core supports UTC, a fixed offset or a
+ * named IANA zone; times are always rendered as UTC). */
 function formatTick(ms: number, bucketWidthMs: number): string {
   const d = new Date(ms);
   if (bucketWidthMs < 60_000) {

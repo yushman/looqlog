@@ -51,8 +51,15 @@ library source touches `std::fs`.
   (`[08/Aug/2026:17:42:01 +0000]`), logcat (`MM-DD hh:mm:ss.mmm`) and integer epoch. They are
   tried at token starts within the first 64 bytes (`HEAD_WINDOW`); the whole pattern must match.
 - An explicit offset is respected. An offset-less value uses the caller's `TimeZonePolicy`: UTC by
-  default or a fixed UTC offset; named IANA zones are not supported. `timestamp_used_default_tz`
+  default, a fixed UTC offset (`fixed_offset`), or a named IANA zone (`named(chrono_tz::Tz)`) resolved
+  per timestamp, so summer and winter lines get their own offsets. `timestamp_used_default_tz`
   marks entries dated by that assumption.
+- In a named zone an ambiguous local time (clocks going back) takes the earlier instant (Berlin
+  2026-10-25 02:30 → 00:30Z); a nonexistent one (clocks going forward) uses the offset in effect 24 h
+  earlier (Berlin 2026-03-29 02:30 → 01:30Z), and is read as UTC when that shift overflows at extreme
+  dates. Both are silent and deterministic, with no diagnostic.
+- The full IANA database is embedded via `chrono-tz` (no regex subset, so every zone works) and frozen
+  per release; the core stays free of I/O and never reads system zoneinfo (ADR-0012).
 - Year-less shapes (syslog 3164, klog, logcat) take the year of the caller-supplied reference
   instant, one year earlier when that would date the entry in the future; `timestamp_year_inferred`
   marks them. The crate never reads the system clock.
@@ -181,8 +188,11 @@ library source touches `std::fs`.
   buckets; the grid is aligned to the width and includes the end instant. It returns unfiltered and
   filtered counts (the range is not applied), timestamped and timestampless counts, and the outlier
   count. Chain members are not counted: a sixty-frame trace is one event.
-- `set_format(format | None, tz_offset_minutes)` re-parses the retained raw lines with the same
-  ordinals, applies to later lines, and bumps the epoch so every view rebuilds.
+- `set_format(format | None, Option<TzOverride>)` re-parses the retained raw lines with the same
+  ordinals, applies to later lines, and bumps the epoch so every view rebuilds. `TzOverride` is
+  `OffsetMinutes(i32)` (minutes east; out of range → `Err("timezone offset out of range: <n> minutes")`)
+  or `Name(String)` (an IANA name; unknown → `Err("unknown time zone: <name>")`). On error the session
+  keeps its previous format and zone. `tz_override()` returns the one in effect.
 - `stats()` returns format, detection, diagnostics summary, field inventory, per-level counts,
   retained entries, total and blank lines, evicted lines, bytes ingested and whether input finished.
 - `retained_bytes()` (raw lines plus an index estimate calibrated with `examples/mem_probe.rs`) is

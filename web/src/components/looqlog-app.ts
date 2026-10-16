@@ -78,6 +78,7 @@ export class LooqlogApp extends HTMLElement {
 
   private formatOverride: string | null = null;
   private tzOffsetMinutes: number | null = null;
+  private tzName: string | null = null;
   private columnWidths: ColumnWidths = DEFAULT_COLUMN_WIDTHS;
   private collapsedPanes: Set<CollapsiblePane> = new Set();
   private readonly hashWriter = new HashWriter();
@@ -206,6 +207,7 @@ export class LooqlogApp extends HTMLElement {
       ws.setCollapsedPanes(this.collapsedPanes);
       this.formatOverride = this.pendingHash.formatOverride;
       this.tzOffsetMinutes = this.pendingHash.tzOffsetMinutes;
+      this.tzName = this.pendingHash.tzName;
     }
 
     this.tableEl.addEventListener("selection-change", (event) => {
@@ -279,7 +281,7 @@ export class LooqlogApp extends HTMLElement {
     this.firstConnect = false;
     if (first) {
       this.controller.attach();
-      if (this.formatOverride !== null || this.tzOffsetMinutes !== null) {
+      if (this.formatOverride !== null || this.tzOffsetMinutes !== null || this.tzName !== null) {
         await this.applyFormatOverride();
       }
     }
@@ -294,7 +296,7 @@ export class LooqlogApp extends HTMLElement {
 
   private async applyFormatOverride(): Promise<void> {
     try {
-      await this.controller.session.setFormat(this.formatOverride, this.tzOffsetMinutes);
+      await this.controller.session.setFormat(this.formatOverride, this.tzOffsetMinutes, this.tzName);
     } catch (err) {
       this.errorMessage = `could not apply the format override: ${err instanceof Error ? err.message : String(err)}`;
       this.renderError();
@@ -441,6 +443,7 @@ export class LooqlogApp extends HTMLElement {
       query: this.filterBarEl?.getState().queryText ?? "",
       formatOverride: this.formatOverride,
       tzOffsetMinutes: this.tzOffsetMinutes,
+      tzName: this.tzName,
       columnWidths: this.columnWidths,
       collapsedPanes: this.collapsedPanes,
     });

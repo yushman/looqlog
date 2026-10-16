@@ -8,7 +8,7 @@ repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
 # Lower than the binary's 1.86 because this crate's runtime dependencies are only
-# `serde`, `serde_json`, `chrono` and `regex`. `criterion` pulls `clap` (1.85), but a dev-dependency
+# `serde`, `serde_json`, `chrono`, `chrono-tz` and `regex`. `criterion` pulls `clap` (1.85), but a dev-dependency
 # constrains benchmarking here, not anyone who depends on this crate.
 rust-version = "1.71"
 keywords = ["log", "logs", "parser", "logfmt", "jsonl"]
@@ -17,10 +17,13 @@ categories = ["parser-implementations", "development-tools"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 # `re:` search (ADR-0010). It was once dropped for its ~1MB cost in core.wasm; with no
 # WASM build left, that cost no longer applies.
 regex = "1"
+# IANA zone names for the `#tz=` override (ADR-0012). The full embedded database, no
+# `filter-by-regex`: every zone must work, and the tzdb is frozen per release.
+chrono-tz = "0.10"
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }

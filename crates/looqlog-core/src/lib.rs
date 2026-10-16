@@ -35,7 +35,7 @@ pub use fields::{FieldInventory, FieldStats};
 pub use format::Format;
 pub use level::Level;
 pub use parser::Parser;
-pub use session::{QueryInput, Session, SessionConfig, View};
+pub use session::{QueryInput, Session, SessionConfig, TzOverride, View};
 pub use timestamp::{ParseContext, TimeZonePolicy, TimestampShape};
 
 /// Result of parsing a JSON-Lines input: how many lines parsed as valid JSON, and a

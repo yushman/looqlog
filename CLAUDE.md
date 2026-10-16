@@ -49,6 +49,7 @@ Key constraints, each with an ADR:
 - The project, binary and every crate are named `looqlog` — [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)
 - Parse on the backend; the browser is a thin client — [ADR-0010](docs/adr/0010-parse-on-the-backend-thin-client.md)
 - Sources are owned by the process (argv, stdin) or by tabs (uploads), under one memory budget — [ADR-0011](docs/adr/0011-sources-owned-by-process-or-tabs.md)
+- The full IANA time zone database is embedded in `looqlog-core` (`chrono-tz`) for `#tz=<name>`, frozen per release — [ADR-0012](docs/adr/0012-embed-full-iana-tz-database.md)
 
 **Privacy guarantee to keep straight:** every mode — argv file, uploaded file, stdin — is
 read by the local `looqlog` process and reaches the browser over a localhost WebSocket in

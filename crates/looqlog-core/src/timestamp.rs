@@ -13,46 +13,70 @@
 
 use std::cell::Cell;
 
-use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{
+    DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc,
+};
+use chrono_tz::Tz;
 
 /// Field names checked for a timestamp, in precedence order.
 pub const TIMESTAMP_FIELDS: &[&str] = &["timestamp", "ts", "time", "@timestamp", "t"];
 
-/// How a timestamp carrying no explicit offset is interpreted. Named IANA zones
-/// (e.g. `Europe/Belgrade`) are NOT supported: that needs a timezone database
-/// (`chrono-tz`), whose embedded data would push `core.wasm` well past the ~300KB
-/// budget this same change is required to protect (design.md D9 risk, TDR §5). A
-/// caller-supplied fixed UTC offset covers the same "naive value written in a known
-/// local time" case without that cost. Recorded as a deliberate scope cut — see
-/// devlog and the final report ("NEEDS HUMAN DECISION": named-zone support).
+/// How a timestamp carrying no explicit offset is interpreted: as UTC, as a fixed UTC
+/// offset, or as local time in a named IANA zone resolved per timestamp, so daylight
+/// saving changes are followed. The zone database is embedded (`chrono-tz`, ADR-0012)
+/// and frozen per release. An ambiguous local time (clocks going back) takes the
+/// earlier instant; a nonexistent one (clocks going forward) uses the offset in effect
+/// before the transition.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TimeZonePolicy {
-    default_offset: FixedOffset,
+    zone: Zone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Zone {
+    Fixed(FixedOffset),
+    Named(Tz),
 }
 
 impl TimeZonePolicy {
     pub fn utc() -> Self {
-        Self {
-            default_offset: FixedOffset::east_opt(0).unwrap(),
-        }
+        Self::fixed_offset(FixedOffset::east_opt(0).unwrap())
     }
 
     pub fn fixed_offset(offset: FixedOffset) -> Self {
         Self {
-            default_offset: offset,
+            zone: Zone::Fixed(offset),
         }
     }
 
-    pub fn offset(&self) -> FixedOffset {
-        self.default_offset
+    pub fn named(tz: Tz) -> Self {
+        Self {
+            zone: Zone::Named(tz),
+        }
     }
 
     fn apply(&self, naive: NaiveDateTime) -> DateTime<Utc> {
-        self.default_offset
-            .from_local_datetime(&naive)
-            .earliest()
-            .unwrap_or_else(|| self.default_offset.from_utc_datetime(&naive))
-            .with_timezone(&Utc)
+        match self.zone {
+            Zone::Fixed(offset) => resolve(&offset, naive),
+            Zone::Named(tz) => resolve(&tz, naive),
+        }
+    }
+}
+
+fn resolve<Z: TimeZone>(zone: &Z, naive: NaiveDateTime) -> DateTime<Utc> {
+    match zone.from_local_datetime(&naive).earliest() {
+        Some(local) => local.with_timezone(&Utc),
+        None => {
+            // Nonexistent local time: reuse the offset in effect just before the gap.
+            let shifted = naive
+                .checked_sub_signed(Duration::hours(24))
+                .map(|earlier| zone.offset_from_utc_datetime(&earlier))
+                .and_then(|before| naive.checked_sub_offset(before.fix()));
+            match shifted {
+                Some(shifted) => DateTime::from_naive_utc_and_offset(shifted, Utc),
+                None => zone.from_utc_datetime(&naive).with_timezone(&Utc),
+            }
+        }
     }
 }
 
@@ -1064,6 +1088,36 @@ mod tests {
         let parsed = parse_value("2026-08-08 17:42:01", &TimeZonePolicy::utc()).unwrap();
         assert!(parsed.used_default_tz);
         assert_eq!(parsed.instant.to_rfc3339(), "2026-08-08T17:42:01+00:00");
+    }
+
+    fn berlin(raw: &str) -> String {
+        let tz = TimeZonePolicy::named(chrono_tz::Europe::Berlin);
+        parse_value(raw, &tz).unwrap().instant.to_rfc3339()
+    }
+
+    #[test]
+    fn named_zone_resolves_summer_and_winter_offsets_per_timestamp() {
+        assert_eq!(berlin("2026-07-01 12:00:00"), "2026-07-01T10:00:00+00:00");
+        assert_eq!(berlin("2026-01-01 12:00:00"), "2026-01-01T11:00:00+00:00");
+    }
+
+    #[test]
+    fn ambiguous_local_time_takes_the_earlier_instant() {
+        assert_eq!(berlin("2026-10-25 02:30:00"), "2026-10-25T00:30:00+00:00");
+    }
+
+    #[test]
+    fn nonexistent_local_time_uses_the_offset_before_the_transition() {
+        assert_eq!(berlin("2026-03-29 02:30:00"), "2026-03-29T01:30:00+00:00");
+    }
+
+    #[test]
+    fn minimum_date_does_not_panic_under_any_zone_policy() {
+        let raw = "-262143-01-01T00:00:00";
+        let fixed = TimeZonePolicy::fixed_offset(FixedOffset::east_opt(3600).unwrap());
+        let named = TimeZonePolicy::named(chrono_tz::Europe::Berlin);
+        let _ = parse_value(raw, &fixed);
+        let _ = parse_value(raw, &named);
     }
 
     #[test]

@@ -209,4 +209,18 @@ describe("ViewSession", () => {
     await session.query({ filters: new Map(), search: "", range: null });
     expect(sent[0]!.toggled).toEqual([4]);
   });
+
+  it("setFormat sends tzName and a null tzOffsetMinutes for a named zone", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const session = new ViewSession(
+      fakeRequester({
+        set_format: (req) => {
+          sent.push(req);
+          return {};
+        },
+      }),
+    );
+    await session.setFormat(null, null, "Europe/Moscow");
+    expect(sent[0]).toMatchObject({ type: "set_format", format: null, tzOffsetMinutes: null, tzName: "Europe/Moscow" });
+  });
 });

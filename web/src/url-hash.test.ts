@@ -14,6 +14,7 @@ describe("encodeHash / decodeHash round trip (task 5.2)", () => {
       query: "connection refused",
       formatOverride: "json",
       tzOffsetMinutes: -300,
+      tzName: null,
       columnWidths: DEFAULT_COLUMN_WIDTHS,
       collapsedPanes: new Set(),
     };
@@ -34,6 +35,7 @@ describe("encodeHash / decodeHash round trip (task 5.2)", () => {
       query: "",
       formatOverride: null,
       tzOffsetMinutes: null,
+      tzName: null,
       columnWidths: DEFAULT_COLUMN_WIDTHS,
       collapsedPanes: new Set(),
     };
@@ -48,6 +50,7 @@ describe("encodeHash / decodeHash round trip (task 5.2)", () => {
       query: "re:a&b#c=d",
       formatOverride: null,
       tzOffsetMinutes: null,
+      tzName: null,
       columnWidths: DEFAULT_COLUMN_WIDTHS,
       collapsedPanes: new Set(),
     };
@@ -62,6 +65,7 @@ describe("encodeHash / decodeHash round trip (task 5.2)", () => {
       query: "",
       formatOverride: null,
       tzOffsetMinutes: null,
+      tzName: null,
       columnWidths: DEFAULT_COLUMN_WIDTHS,
       collapsedPanes: new Set(),
     };
@@ -75,6 +79,7 @@ describe("encodeHash / decodeHash round trip (task 5.2)", () => {
       query: "",
       formatOverride: null,
       tzOffsetMinutes: null,
+      tzName: null,
       columnWidths: { ordinal: 4.5, timestamp: 6, level: 2.5 },
       collapsedPanes: new Set(),
     };
@@ -96,6 +101,7 @@ describe("encodeHash / decodeHash round trip (task 5.2)", () => {
       query: "",
       formatOverride: null,
       tzOffsetMinutes: null,
+      tzName: null,
       columnWidths: DEFAULT_COLUMN_WIDTHS,
       collapsedPanes: new Set(["detail"]),
     };
@@ -212,10 +218,60 @@ describe("decodeHash — malformed input", () => {
   });
 });
 
+describe("tz grammar", () => {
+  it("decodeHash reads an IANA name as tzName", () => {
+    const d = decodeHash("#tz=Europe/Moscow");
+    expect(d.tzName).toBe("Europe/Moscow");
+    expect(d.tzOffsetMinutes).toBeNull();
+    expect(decodeHash("#tz=Etc/GMT+3").tzName).toBe("Etc/GMT+3");
+    expect(decodeHash("#tz=Etc/GMT%2B3").tzName).toBe("Etc/GMT+3");
+  });
+
+  it("an integer offset stays tzOffsetMinutes and leaves tzName null", () => {
+    const d = decodeHash("#tz=180");
+    expect(d.tzOffsetMinutes).toBe(180);
+    expect(d.tzName).toBeNull();
+    expect(decodeHash("#tz=1439").tzOffsetMinutes).toBe(1439);
+    expect(decodeHash("#tz=-1439").tzOffsetMinutes).toBe(-1439);
+  });
+
+  it("drops values that are neither an offset nor a name", () => {
+    for (const v of ["1.5", "+03:00", "1e10", "1440", "-1440", ""]) {
+      const d = decodeHash(`#tz=${v}`);
+      expect(d.tzOffsetMinutes, v).toBeNull();
+      expect(d.tzName, v).toBeNull();
+    }
+  });
+});
+
+describe("tz writeback", () => {
+  it("encodeHash writes a tzName back verbatim and round-trips", () => {
+    for (const tzName of ["Etc/GMT+3", "Europe/Moscow"]) {
+      const hash = encodeHash({ ...EMPTY_HASH_STATE, tzName });
+      expect(hash).toBe(`tz=${new URLSearchParams({ tz: tzName }).toString().slice(3)}`);
+      const d = decodeHash(hash);
+      expect(d.tzName).toBe(tzName);
+      expect(d.tzOffsetMinutes).toBeNull();
+    }
+  });
+
+  it("#tz=180 round-trips unchanged", () => {
+    expect(encodeHash({ ...EMPTY_HASH_STATE, tzOffsetMinutes: 180 })).toBe("tz=180");
+  });
+
+  it("formatOverrideFromHash returns tzName and is non-null when only it is set", () => {
+    expect(formatOverrideFromHash("#tz=Europe/Moscow")).toEqual({
+      formatOverride: null,
+      tzOffsetMinutes: null,
+      tzName: "Europe/Moscow",
+    });
+  });
+});
+
 describe("formatOverrideFromHash", () => {
   it("reads only format and tz, and returns null when neither is set", () => {
-    expect(formatOverrideFromHash("#format=plain&tz=180")).toEqual({ formatOverride: "plain", tzOffsetMinutes: 180 });
-    expect(formatOverrideFromHash("#tz=-60")).toEqual({ formatOverride: null, tzOffsetMinutes: -60 });
+    expect(formatOverrideFromHash("#format=plain&tz=180")).toEqual({ formatOverride: "plain", tzOffsetMinutes: 180, tzName: null });
+    expect(formatOverrideFromHash("#tz=-60")).toEqual({ formatOverride: null, tzOffsetMinutes: -60, tzName: null });
     expect(formatOverrideFromHash("#range=1,2&filter=a%3Db&q=x&cols=3,12,2.5&panes=rail")).toBeNull();
     expect(formatOverrideFromHash("#tz=+03:00")).toBeNull();
     expect(formatOverrideFromHash("#tz=1.5")).toBeNull();

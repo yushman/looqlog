@@ -174,7 +174,7 @@ export type ClientRequest =
   | { type: "window"; offset: number; limit: number; anchor?: number }
   | { type: "entry"; ordinal: number }
   | { type: "buckets"; span?: TimeRangeDto; fullSpan: boolean }
-  | { type: "set_format"; format: string | null; tzOffsetMinutes: number | null }
+  | { type: "set_format"; format: string | null; tzOffsetMinutes: number | null; tzName: string | null }
   | { type: "toggle_chain"; root: number }
   | { type: "stats" }
   | { type: "close"; source: string };

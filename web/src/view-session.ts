@@ -128,8 +128,8 @@ export class ViewSession {
     return this.client.request<StatsReplyDto>({ type: "stats" });
   }
 
-  setFormat(format: string | null, tzOffsetMinutes: number | null): Promise<StatsDto> {
-    return this.client.request<StatsDto>({ type: "set_format", format, tzOffsetMinutes });
+  setFormat(format: string | null, tzOffsetMinutes: number | null, tzName: string | null): Promise<StatsDto> {
+    return this.client.request<StatsDto>({ type: "set_format", format, tzOffsetMinutes, tzName });
   }
 
   /** A `grown` notification: cumulative counts for this connection's view. */

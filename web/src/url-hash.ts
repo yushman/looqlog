@@ -14,7 +14,8 @@
 //                                    misread as two values)
 //   q=<text>                     -- raw search box text (may start with `re:`)
 //   format=<json|logfmt|plain>   -- format override, `log-parsing-core` spec
-//   tz=<minutes>                 -- fixed UTC offset override, minutes east
+//   tz=<minutes|IANA name>       -- UTC offset override (minutes east, |n| < 1440)
+//                                   or an IANA zone name, e.g. Europe/Moscow
 //   cols=<ordinal>,<timestamp>,<level>
 //                                -- entry-table column widths in `rem`, only the
 //                                   directly resizable columns; the message column
@@ -48,6 +49,8 @@ export interface HashState {
   query: string;
   formatOverride: string | null;
   tzOffsetMinutes: number | null;
+  /** IANA zone name; at most one of this and `tzOffsetMinutes` is non-null. */
+  tzName: string | null;
   /** Entry-table column widths in `rem`. Encoded only when they differ from the
    * defaults, so an untouched table leaves the link exactly as it was. */
   columnWidths: ColumnWidths;
@@ -61,6 +64,7 @@ export const EMPTY_HASH_STATE: HashState = {
   query: "",
   formatOverride: null,
   tzOffsetMinutes: null,
+  tzName: null,
   columnWidths: DEFAULT_COLUMN_WIDTHS,
   collapsedPanes: new Set(),
 };
@@ -85,6 +89,8 @@ export function encodeHash(state: HashState): string {
   }
   if (state.tzOffsetMinutes !== null) {
     params.set("tz", String(state.tzOffsetMinutes));
+  } else if (state.tzName !== null) {
+    params.set("tz", state.tzName);
   }
   const cols = encodeColumnWidths(state.columnWidths);
   if (cols !== null) {
@@ -103,6 +109,7 @@ export interface DecodedHash {
   query: string;
   formatOverride: string | null;
   tzOffsetMinutes: number | null;
+  tzName: string | null;
   /** Always usable: a malformed or out-of-range `cols=` yields defaults/clamped
    * values here and an entry in `columnWidthErrors`, never a failure — a width is
    * a presentation preference, not data (`url-state` spec, "A bad column width
@@ -129,6 +136,18 @@ export interface DecodedHash {
    * recognise, which is a semantic check the caller makes once the field
    * inventory exists (this module knows nothing about a dataset). */
   malformedFilterCount: number;
+}
+
+const TZ_NAME = /^[A-Za-z][A-Za-z0-9_+\-/]*$/;
+
+function parseTz(raw: string | null): { tzOffsetMinutes: number | null; tzName: string | null } {
+  // URLSearchParams decodes a hand-typed `+` as a space.
+  const value = raw?.replace(/ /g, "+") ?? "";
+  if (/^[+-]?\d+$/.test(value)) {
+    const n = Number(value);
+    return { tzOffsetMinutes: Math.abs(n) < 1440 ? n : null, tzName: null };
+  }
+  return { tzOffsetMinutes: null, tzName: TZ_NAME.test(value) ? value : null };
 }
 
 export function decodeHash(hash: string): DecodedHash {
@@ -171,9 +190,7 @@ export function decodeHash(hash: string): DecodedHash {
 
   const query = params.get("q") ?? "";
   const formatOverride = params.get("format");
-  const tzRaw = params.get("tz");
-  const tzParsed = tzRaw !== null ? Number(tzRaw) : NaN;
-  const tzOffsetMinutes = Number.isInteger(tzParsed) && Math.abs(tzParsed) <= 1440 ? tzParsed : null;
+  const { tzOffsetMinutes, tzName } = parseTz(params.get("tz"));
   const { widths: columnWidths, errors: columnWidthErrors } = parseColumnWidths(params.get("cols"));
   const { panes: collapsedPanes, errors: collapsedPaneErrors } = parseCollapsedPanes(params.get("panes"));
 
@@ -183,6 +200,7 @@ export function decodeHash(hash: string): DecodedHash {
     query,
     formatOverride,
     tzOffsetMinutes,
+    tzName,
     columnWidths,
     columnWidthErrors,
     collapsedPanes,
@@ -193,12 +211,14 @@ export function decodeHash(hash: string): DecodedHash {
   };
 }
 
-/** The only hash parts stdin mode reads: the format and timezone override, or null when neither is set. */
+/** The only hash parts stdin mode reads: the format and timezone override, or null when none is set. */
 export function formatOverrideFromHash(
   hash: string,
-): { formatOverride: string | null; tzOffsetMinutes: number | null } | null {
-  const { formatOverride, tzOffsetMinutes } = decodeHash(hash);
-  return formatOverride === null && tzOffsetMinutes === null ? null : { formatOverride, tzOffsetMinutes };
+): { formatOverride: string | null; tzOffsetMinutes: number | null; tzName: string | null } | null {
+  const { formatOverride, tzOffsetMinutes, tzName } = decodeHash(hash);
+  return formatOverride === null && tzOffsetMinutes === null && tzName === null
+    ? null
+    : { formatOverride, tzOffsetMinutes, tzName };
 }
 
 /**

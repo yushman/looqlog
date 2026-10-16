@@ -14,7 +14,7 @@ use axum::routing::{get, post};
 use axum::{extract::Request, Json, Router};
 use futures_util::StreamExt;
 use looqlog_core::dto::format_from_str;
-use looqlog_core::session::{filters_from, QueryInput};
+use looqlog_core::session::{filters_from, QueryInput, TzOverride};
 use looqlog_core::View;
 
 use crate::assets::{render_index, APP_CSS, APP_JS};
@@ -630,6 +630,7 @@ fn dispatch(conn: &mut Conn, id: u64, request: ClientMessage) -> ServerMessage {
         ClientMessage::SetFormat {
             format,
             tz_offset_minutes,
+            tz_name,
             ..
         } => {
             let format = match format.as_deref() {
@@ -644,7 +645,17 @@ fn dispatch(conn: &mut Conn, id: u64, request: ClientMessage) -> ServerMessage {
                     }
                 },
             };
-            match src.session.set_format(format, tz_offset_minutes) {
+            let tz = match (tz_name, tz_offset_minutes) {
+                (Some(_), Some(_)) => {
+                    return ServerMessage::Error {
+                        id,
+                        message: "tzOffsetMinutes and tzName are mutually exclusive".into(),
+                    }
+                }
+                (Some(name), None) => Some(TzOverride::Name(name)),
+                (None, minutes) => minutes.map(TzOverride::OffsetMinutes),
+            };
+            match src.session.set_format(format, tz) {
                 Ok(stats) => reply(id, stats),
                 Err(message) => ServerMessage::Error { id, message },
             }

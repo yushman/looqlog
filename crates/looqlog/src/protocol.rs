@@ -66,6 +66,8 @@ pub enum ClientMessage {
         format: Option<String>,
         #[serde(default)]
         tz_offset_minutes: Option<i32>,
+        #[serde(default)]
+        tz_name: Option<String>,
     },
     ToggleChain {
         id: u64,
@@ -178,6 +180,19 @@ mod tests {
                 id: 1,
                 format: Some("logfmt".into()),
                 tz_offset_minutes: Some(120),
+                tz_name: None,
+            }
+        );
+        let msg: ClientMessage =
+            serde_json::from_str(r#"{"type":"set_format","id":2,"tzName":"Europe/Berlin"}"#)
+                .unwrap();
+        assert_eq!(
+            msg,
+            ClientMessage::SetFormat {
+                id: 2,
+                format: None,
+                tz_offset_minutes: None,
+                tz_name: Some("Europe/Berlin".into()),
             }
         );
         let msg: ClientMessage = serde_json::from_str(

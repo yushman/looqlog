@@ -362,7 +362,14 @@ widths are `cols=<#>,<timestamp>,<level>` in `rem`, in that order; the message c
 derived from the other three and so has no place in the grammar, and widths that are all
 at their defaults are left out of the link entirely. Collapsed panes are
 `panes=rail`, `panes=detail` or `panes=rail+detail` — the key names what is *collapsed*,
-so the usual state of both panes open is absent from the link entirely. **The hash contains your search text
+so the usual state of both panes open is absent from the link entirely. **Timezone.** `#tz=` takes either
+a fixed offset in minutes (`#tz=180`, `|n| < 1440`) or an IANA name (`#tz=Europe/Berlin`),
+applied to timestamps that carry no offset of their own. A name is resolved per
+timestamp, so summer and winter lines get their own offsets; a local time that occurs
+twice (clocks going back) takes the earlier instant, and one that never happens (clocks
+going forward) uses the offset in effect before the transition. A name the embedded
+timezone database doesn't know shows "could not apply the format override: unknown time
+zone: …". Times are still displayed in UTC. **The hash contains your search text
 and filter values — real fragments of your log** — so a link copied via the "Copy
 shareable link" button, or the caveat shown at that moment, is telling you something
 true: don't paste it somewhere the log contents shouldn't go. A URL with an unrecognised
@@ -455,9 +462,6 @@ anywhere, so both appearances render fully with the network disabled.
 
 ## Known limitations
 
-- **Named timezones aren't supported** — only UTC and fixed offsets. A timestamp
-  written in `Europe/Belgrade` local time with no explicit offset is read as UTC. A
-  full IANA timezone database (`chrono-tz`) has not been added.
 - **A multi-line event is grouped, not merged.** The lines of a stack trace or a
   pretty-printed JSON payload are linked into one collapsible row and counted once on
   the timeline, but each line is still its own entry underneath — and the keys nested

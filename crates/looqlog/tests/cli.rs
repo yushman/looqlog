@@ -996,6 +996,93 @@ async fn two_sources_keep_their_own_entries_and_format() {
     let _ = child.wait();
 }
 
+/// `set_format` with `tzName`: offset-less timestamps are read in that zone, per-line DST.
+#[tokio::test]
+async fn set_format_with_tz_name_parses_offsetless_timestamps_in_that_zone() {
+    use ws_client::connect_source;
+
+    let path = temp_log(
+        "tzname.log",
+        "{\"ts\":\"2026-07-01 12:00:00\",\"msg\":\"summer\"}\n{\"ts\":\"2026-01-01 12:00:00\",\"msg\":\"winter\"}\n",
+    );
+    let (mut child, port) =
+        spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[&path]));
+    drop(child.stdin.take());
+    let id = source_id(port, "tzname.log").await;
+    let mut tab = connect_source(port, &id).await;
+    tab.wait_for_total(2, Duration::from_secs(5)).await;
+    tab.request(serde_json::json!({"type": "set_format", "tzName": "Europe/Berlin"}))
+        .await;
+    let w = tab
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+        .await;
+    let stamps: Vec<&str> = w["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["timestamp"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        stamps,
+        vec!["2026-07-01T10:00:00+00:00", "2026-01-01T11:00:00+00:00"]
+    );
+
+    let bad = tab
+        .request_raw(serde_json::json!({"type": "set_format", "tzName": "Europe/Moskow"}))
+        .await;
+    assert_eq!(bad["type"], "error", "{bad}");
+    assert_eq!(bad["message"], "unknown time zone: Europe/Moskow");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `tzOffsetMinutes` and `tzName` together are refused and change nothing.
+#[tokio::test]
+async fn set_format_rejects_tz_offset_together_with_tz_name() {
+    use ws_client::connect_source;
+
+    let path = temp_log(
+        "tzboth.log",
+        "{\"ts\":\"2026-07-01 12:00:00\",\"msg\":\"summer\"}\n",
+    );
+    let (mut child, port) =
+        spawn_with_retry(Duration::from_secs(5), |p| spawn_stdin_mode(p, &[&path]));
+    drop(child.stdin.take());
+    let id = source_id(port, "tzboth.log").await;
+    let mut tab = connect_source(port, &id).await;
+    let mut other = connect_source(port, &id).await;
+    tab.wait_for_total(1, Duration::from_secs(5)).await;
+    other.wait_for_total(1, Duration::from_secs(5)).await;
+    let bad = tab
+        .request_raw(serde_json::json!({
+            "type": "set_format", "tzOffsetMinutes": 60, "tzName": "Europe/Berlin"
+        }))
+        .await;
+    assert_eq!(bad["type"], "error", "{bad}");
+    assert_eq!(
+        bad["message"],
+        "tzOffsetMinutes and tzName are mutually exclusive"
+    );
+    assert!(
+        other
+            .wait_for(Duration::from_millis(600), |m| m["type"] == "reset")
+            .await
+            .is_none(),
+        "a rejected set_format reset the source"
+    );
+    let w = tab
+        .request(serde_json::json!({"type": "window", "offset": 0, "limit": 10}))
+        .await;
+    assert_eq!(
+        w["data"]["rows"][0]["timestamp"],
+        "2026-07-01T12:00:00+00:00"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// `query-api`, "Stale link after restart" and `local-server`, "Unknown id still loads
 /// the page".
 #[tokio::test]

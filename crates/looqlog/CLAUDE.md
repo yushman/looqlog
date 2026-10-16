@@ -103,7 +103,9 @@ readers that feed `looqlog-core` sessions.
   and is never interpreted.
 - Requests: `query {filters, search, range, toggled}`; `window {offset, limit, anchor?}` (`anchor`
   starts at that ordinal's current row position); `entry {ordinal}`; `buckets {span?, fullSpan}`;
-  `set_format {format: json|logfmt|plain|auto|null, tzOffsetMinutes?}`; `toggle_chain {root}` →
+  `set_format {format: json|logfmt|plain|auto|null, tzOffsetMinutes?, tzName?}` (both zone fields
+  set → error `tzOffsetMinutes and tzName are mutually exclusive`; neither → UTC; core errors such as
+  `unknown time zone: <name>` come back as `error`); `toggle_chain {root}` →
   `{rowCount}`; `stats` → `{source, stats}` (name, error, size warning and thresholds beside the
   session stats); `close {source}` on the landing connection only.
 - Each source connection has its own `View`: one tab's query never changes another tab's windows,
