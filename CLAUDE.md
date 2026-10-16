@@ -105,6 +105,28 @@ rather than loud (see ADR-0004):
 - Parse/filter latency regressions are easy to introduce silently; run `cargo bench`
   on `looqlog-core` before merging changes to its hot paths.
 
+## Spec-driven workflow (slimspec) — required
+
+Specs are the module `CLAUDE.md` files —
+[crates/looqlog/CLAUDE.md](crates/looqlog/CLAUDE.md),
+[crates/looqlog-core/CLAUDE.md](crates/looqlog-core/CLAUDE.md), [web/CLAUDE.md](web/CLAUDE.md) —
+plus this file for cross-module facts. They describe what the code does now; read the
+module's spec before changing it.
+
+**No feature work without a slimspec change.** Anything larger than a bugfix runs through
+`/slimspec <idea>`: explore → plan → apply → verify → ground. The in-flight change lives in
+`.slimspec/changes/<slug>/` (`explore.md`, `tasks.md`) and is deleted by ground once its durable
+knowledge is merged into the specs.
+
+- Pick the mode by risk: `fast` — one module, a few files, no open decisions; `medium` — real
+  decisions or several files; `full` — cross-module, public contract, security or migration.
+- Decisions are made in explore, in the main session; implementation is red-green TDD in
+  fresh agents. Verify the agents' evidence, don't trust their self-report.
+- A defect found by verify is fixed inside the change (a reopened or new task), not spun out
+  as a follow-up change.
+- Never edit module specs by hand to describe unshipped behavior; ground updates them from
+  what actually shipped.
+
 ## Working rhythm — required
 
 - **Write an ADR when a decision is expensive to reverse** or when a reader would
