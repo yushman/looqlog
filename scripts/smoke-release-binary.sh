@@ -100,8 +100,10 @@ echo "ok: no WASM route"
 echo "== stdin line is queryable by a WebSocket client on /ws =="
 TOKEN=$(sed -n 's/.*<template id="token-template">\([^<]*\)<\/template>.*/\1/p' "$WORKDIR/index.html")
 [ -n "$TOKEN" ] || fail "token-template present in served page" "a non-empty per-process token" "no token found in GET / body"
+SOURCE=$(sed -n 's/.*stdin.*\/l\/\([a-z2-7]\{8\}\).*/\1/p' "$WORKDIR/stdout.log" | head -n 1)
+[ -n "$SOURCE" ] || fail "banner names the stdin source URL" "a /l/<id> line for stdin" "$(cat "$WORKDIR/stdout.log")"
 
-if ! "$PY" - "$PORT" "$TOKEN" "$SMOKE_LINE" <<'PYEOF'
+if ! "$PY" - "$PORT" "$TOKEN" "$SMOKE_LINE" "$SOURCE" <<'PYEOF'
 import base64
 import json
 import os
@@ -114,6 +116,7 @@ host = "127.0.0.1"
 port = int(sys.argv[1])
 token = sys.argv[2]
 expected_line = sys.argv[3]
+source = sys.argv[4]
 
 
 def recv_exact(sock, n):
@@ -186,7 +189,7 @@ def recv_frame(sock):
 sock = socket.create_connection((host, port), timeout=5)
 try:
     ws_handshake(sock)
-    send_text_frame(sock, json.dumps({"type": "auth", "token": token}))
+    send_text_frame(sock, json.dumps({"type": "auth", "token": token, "source": source}))
 
     # Wait for a `grown` notification counting the line, then ask for it with a
     # `window` request and look for it in the reply (query-api spec).
