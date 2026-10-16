@@ -6,13 +6,18 @@ result, so log contents never leave your machine.
 
 [Русская версия](README.ru.md) · [Website](https://yushman.github.io/looqlog/)
 
-> **Status: v0.2.1, on [crates.io](https://crates.io/crates/looqlog).** v0.2.1 reads the
-> padded tags that `adb logcat` emits in its default format, which on a measured device
-> dump was 15.5% of the lines arriving with no timestamp and no level at all. Since
-> v0.1.0 the project was renamed from `looq` (see
-> [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)) and learned to group multi-line
-> events: Java stack traces, Python tracebacks and pretty-printed payloads collapse into
-> the entry they continue, and the timeline counts events rather than physical lines.
+> **Status: v0.3.0, on [crates.io](https://crates.io/crates/looqlog).** v0.3.0 moves
+> parsing out of the browser into the local `looqlog` process (see
+> [ADR-0010](docs/adr/0010-parse-on-the-backend-thin-client.md)): a file named on the
+> command line opens straight into the log with no file picker, one process holds several
+> files and stdin side by side under a source list at `/`, and a file picked or dropped
+> there is uploaded to the local process. The `#format=` and `#tz=` URL overrides now work
+> on a live stdin stream too, and `#tz=` takes an IANA zone name (`#tz=Europe/Berlin`) as
+> well as a fixed offset. Earlier releases read the padded tags of `adb logcat` (v0.2.1),
+> renamed the project from `looq` (see
+> [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)) and grouped multi-line events:
+> Java stack traces, Python tracebacks and pretty-printed payloads collapse into the entry
+> they continue, and the timeline counts events rather than physical lines.
 >
 > The server, CLI, parser
 > (JSON Lines / logfmt / plain text, auto-detected — with syslog, klog, Apache/CLF and
@@ -48,16 +53,16 @@ cargo install looqlog
 looqlog --version
 ```
 
-This installs the current release, `0.2.1`, from
+This installs the current release, `0.3.0`, from
 [crates.io](https://crates.io/crates/looqlog), and needs nothing but a Rust toolchain.
 
 Or take a prebuilt binary, which needs no Rust at all:
 
 ```bash
 # Linux x86_64, statically linked against musl
-curl -LO https://github.com/yushman/looqlog/releases/download/v0.2.1/looqlog-0.2.1-x86_64-unknown-linux-musl
-chmod +x looqlog-0.2.1-x86_64-unknown-linux-musl
-./looqlog-0.2.1-x86_64-unknown-linux-musl --version
+curl -LO https://github.com/yushman/looqlog/releases/download/v0.3.0/looqlog-0.3.0-x86_64-unknown-linux-musl
+chmod +x looqlog-0.3.0-x86_64-unknown-linux-musl
+./looqlog-0.3.0-x86_64-unknown-linux-musl --version
 ```
 
 Also built for `aarch64-apple-darwin`, `x86_64-apple-darwin` and
@@ -65,7 +70,7 @@ Also built for `aarch64-apple-darwin`, `x86_64-apple-darwin` and
 published — see "Which platforms are verified how" below for what that does and does not
 prove.
 
-The URL above is pinned to `v0.2.1` on purpose: asset names carry the version, so a
+The URL above is pinned to `v0.3.0` on purpose: asset names carry the version, so a
 `releases/latest/download/` link breaks the moment a newer release exists. For any later
 version, take the file name from the
 [Releases page](https://github.com/yushman/looqlog/releases/latest).

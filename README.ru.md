@@ -6,11 +6,15 @@ live-потока из stdin. Парсинг идёт в локальном пр
 
 [English version](README.md) · [Сайт](https://yushman.github.io/looqlog/ru.html)
 
-> **Статус: v0.2.1, опубликован на [crates.io](https://crates.io/crates/looqlog).** В
-> v0.2.1 читаются выровненные пробелами теги, которые `adb logcat` выдаёт в формате по
-> умолчанию: на замеренном дампе с устройства это 15.5% строк, приходивших вообще без
-> времени и уровня. После
-> v0.1.0 проект переименован из `looq` (см.
+> **Статус: v0.3.0, опубликован на [crates.io](https://crates.io/crates/looqlog).** В
+> v0.3.0 парсинг переехал из браузера в локальный процесс `looqlog` (см.
+> [ADR-0010](docs/adr/0010-parse-on-the-backend-thin-client.md)): файл из командной строки
+> открывается сразу в лог, без выбора файла, один процесс держит несколько файлов и stdin
+> рядом в списке источников на `/`, а файл, выбранный или перетащенный туда, загружается в
+> локальный процесс. Оверрайды `#format=` и `#tz=` в URL теперь работают и на живом потоке
+> stdin, а `#tz=` принимает имя IANA-зоны (`#tz=Europe/Berlin`) наравне с фиксированным
+> смещением. В прошлых релизах появилось чтение выровненных тегов `adb logcat` (v0.2.1),
+> проект переименован из `looq` (см.
 > [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)) и научился склеивать
 > многострочные события: Java-трейсы, питоновские traceback'и и развёрнутые payload'ы
 > сворачиваются в запись, которую они продолжают, а таймлайн считает события, а не
@@ -51,16 +55,16 @@ cargo install looqlog
 looqlog --version
 ```
 
-Ставится текущий релиз `0.2.1` с
+Ставится текущий релиз `0.3.0` с
 [crates.io](https://crates.io/crates/looqlog), и кроме Rust toolchain ничего не нужно.
 
 Либо возьмите готовый бинарь, для него Rust не нужен вообще:
 
 ```bash
 # Linux x86_64, статически слинкован с musl
-curl -LO https://github.com/yushman/looqlog/releases/download/v0.2.1/looqlog-0.2.1-x86_64-unknown-linux-musl
-chmod +x looqlog-0.2.1-x86_64-unknown-linux-musl
-./looqlog-0.2.1-x86_64-unknown-linux-musl --version
+curl -LO https://github.com/yushman/looqlog/releases/download/v0.3.0/looqlog-0.3.0-x86_64-unknown-linux-musl
+chmod +x looqlog-0.3.0-x86_64-unknown-linux-musl
+./looqlog-0.3.0-x86_64-unknown-linux-musl --version
 ```
 
 Также собираются сборки для `aarch64-apple-darwin`, `x86_64-apple-darwin` и
@@ -68,7 +72,7 @@ chmod +x looqlog-0.2.1-x86_64-unknown-linux-musl
 платформе перед публикацией — см. «Какие платформы проверены как» ниже: там написано,
 что именно это доказывает, а что нет.
 
-Ссылка выше намеренно привязана к тегу `v0.2.1`: имена артефактов содержат версию,
+Ссылка выше намеренно привязана к тегу `v0.3.0`: имена артефактов содержат версию,
 поэтому ссылка через `releases/latest/download/` сломается сразу же, как выйдет
 следующий релиз. Для более новой версии возьмите имя файла со
 [страницы Releases](https://github.com/yushman/looqlog/releases/latest).
