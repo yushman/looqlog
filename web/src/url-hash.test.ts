@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_COLUMN_WIDTHS, MIN_COLUMN_WIDTHS } from "./column-widths";
-import { decodeHash, EMPTY_HASH_STATE, encodeHash, type HashState } from "./url-hash";
+import { decodeHash, EMPTY_HASH_STATE, encodeHash, formatOverrideFromHash, type HashState } from "./url-hash";
 
 describe("encodeHash / decodeHash round trip (task 5.2)", () => {
   it("round-trips a range, two field filters and a query", () => {
@@ -209,5 +209,17 @@ describe("decodeHash — malformed input", () => {
 
   it("`panes` is a known key, so it is never reported as unrecognised", () => {
     expect(decodeHash("panes=rail").unknownKeys).toEqual([]);
+  });
+});
+
+describe("formatOverrideFromHash", () => {
+  it("reads only format and tz, and returns null when neither is set", () => {
+    expect(formatOverrideFromHash("#format=plain&tz=180")).toEqual({ formatOverride: "plain", tzOffsetMinutes: 180 });
+    expect(formatOverrideFromHash("#tz=-60")).toEqual({ formatOverride: null, tzOffsetMinutes: -60 });
+    expect(formatOverrideFromHash("#range=1,2&filter=a%3Db&q=x&cols=3,12,2.5&panes=rail")).toBeNull();
+    expect(formatOverrideFromHash("#tz=+03:00")).toBeNull();
+    expect(formatOverrideFromHash("#tz=1.5")).toBeNull();
+    expect(formatOverrideFromHash("#tz=1e10")).toBeNull();
+    expect(formatOverrideFromHash("")).toBeNull();
   });
 });

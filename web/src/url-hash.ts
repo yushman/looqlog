@@ -172,7 +172,8 @@ export function decodeHash(hash: string): DecodedHash {
   const query = params.get("q") ?? "";
   const formatOverride = params.get("format");
   const tzRaw = params.get("tz");
-  const tzOffsetMinutes = tzRaw !== null && Number.isFinite(Number(tzRaw)) ? Number(tzRaw) : null;
+  const tzParsed = tzRaw !== null ? Number(tzRaw) : NaN;
+  const tzOffsetMinutes = Number.isInteger(tzParsed) && Math.abs(tzParsed) <= 1440 ? tzParsed : null;
   const { widths: columnWidths, errors: columnWidthErrors } = parseColumnWidths(params.get("cols"));
   const { panes: collapsedPanes, errors: collapsedPaneErrors } = parseCollapsedPanes(params.get("panes"));
 
@@ -190,6 +191,14 @@ export function decodeHash(hash: string): DecodedHash {
     rangeError,
     malformedFilterCount,
   };
+}
+
+/** The only hash parts stdin mode reads: the format and timezone override, or null when neither is set. */
+export function formatOverrideFromHash(
+  hash: string,
+): { formatOverride: string | null; tzOffsetMinutes: number | null } | null {
+  const { formatOverride, tzOffsetMinutes } = decodeHash(hash);
+  return formatOverride === null && tzOffsetMinutes === null ? null : { formatOverride, tzOffsetMinutes };
 }
 
 /**

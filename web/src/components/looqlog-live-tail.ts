@@ -20,7 +20,7 @@ import { QueryClient, socketUrl, type ConnectionState } from "../query-client";
 import type { Notification } from "../query-types";
 import { goneMessage } from "../routing";
 import { readAuthToken } from "../token";
-import { HashWriter, SHARE_CAVEAT } from "../url-hash";
+import { formatOverrideFromHash, HashWriter, SHARE_CAVEAT } from "../url-hash";
 import type { LooqlogDetection } from "./looqlog-detection";
 import type { LooqlogDiagnostics } from "./looqlog-diagnostics";
 import type { LooqlogEntryDetail } from "./looqlog-entry-detail";
@@ -68,7 +68,11 @@ export class LooqlogLiveTail extends HTMLElement {
 
   /** The table owns the drag, the workspace owns the toggles; this shell owns what
    * the copy-link affordance puts in the URL. A stdin session has no file for a
-   * fresh tab to reproduce, so the hash is only written here, never read. */
+   * fresh tab to reproduce, so only the format and timezone override are read back
+   * from the hash; everything else is written, never read. */
+  private formatOverride: string | null = null;
+  private tzOffsetMinutes: number | null = null;
+  private overrideApplied = false;
   private columnWidths: ColumnWidths = DEFAULT_COLUMN_WIDTHS;
   private collapsedPanes: Set<CollapsiblePane> = new Set();
   private readonly hashWriter = new HashWriter();
@@ -86,6 +90,9 @@ export class LooqlogLiveTail extends HTMLElement {
   connectedCallback(): void {
     // The same `looqlog-workspace` file mode mounts (design.md D1): only the contents
     // of the panes differ, never the arrangement.
+    const override = formatOverrideFromHash(location.hash);
+    this.formatOverride = override?.formatOverride ?? null;
+    this.tzOffsetMinutes = override?.tzOffsetMinutes ?? null;
     this.innerHTML = `<looqlog-workspace></looqlog-workspace>`;
     const ws = this.querySelector("looqlog-workspace") as LooqlogWorkspace;
     this.workspace = ws;
@@ -223,6 +230,12 @@ export class LooqlogLiveTail extends HTMLElement {
       this.controller.attach();
     }
     this.connected = true;
+    if (!this.overrideApplied) {
+      this.overrideApplied = true;
+      if (this.formatOverride !== null || this.tzOffsetMinutes !== null) {
+        await this.applyFormatOverride();
+      }
+    }
     await this.controller.refreshStats(true);
     await this.controller.runQuery();
     if (this.following) {
@@ -273,13 +286,22 @@ export class LooqlogLiveTail extends HTMLElement {
     this.workspace.setTimelineVisible(false);
   }
 
+  private async applyFormatOverride(): Promise<void> {
+    try {
+      await this.controller.session.setFormat(this.formatOverride, this.tzOffsetMinutes);
+    } catch (err) {
+      this.errorEl.hidden = false;
+      this.errorEl.textContent = `could not apply the format override: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
   private scheduleHashWrite(): void {
     this.hashWriter.schedule({
       range: this.controller?.range ?? null,
       fieldFilters: this.controller?.filters ?? new Map(),
       query: this.filterBarEl?.getState().queryText ?? "",
-      formatOverride: null,
-      tzOffsetMinutes: null,
+      formatOverride: this.formatOverride,
+      tzOffsetMinutes: this.tzOffsetMinutes,
       columnWidths: this.columnWidths,
       collapsedPanes: this.collapsedPanes,
     });
