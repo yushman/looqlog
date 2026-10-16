@@ -45,6 +45,7 @@ Key constraints, each with an ADR:
 - Core parser crate is target-agnostic (native today, MCP adapter later), MCP transport is `rmcp` — [ADR-0005](docs/adr/0005-target-agnostic-core-crate-rmcp.md)
 - The project, binary and crate were originally named `looq`, superseded by ADR-0009 — [ADR-0006](docs/adr/0006-project-named-looq.md)
 - The argv path was a hint, not an auto-loaded file; superseded by ADR-0010 — [ADR-0007](docs/adr/0007-argv-path-is-a-hint-not-an-auto-loaded-file.md)
+- Compiled frontend artifacts are committed and shipped in the crate, so building needs no JS toolchain — [ADR-0008](docs/adr/0008-vendored-frontend-artifacts.md)
 - The project, binary and every crate are named `looqlog` — [ADR-0009](docs/adr/0009-project-renamed-to-looqlog.md)
 - Parse on the backend; the browser is a thin client — [ADR-0010](docs/adr/0010-parse-on-the-backend-thin-client.md)
 - Sources are owned by the process (argv, stdin) or by tabs (uploads), under one memory budget — [ADR-0011](docs/adr/0011-sources-owned-by-process-or-tabs.md)
@@ -64,6 +65,30 @@ leaves your browser" in UI copy or docs; it is no longer true for any mode.
 - Frontend: TypeScript (strict), Vite, Web Components, `uPlot`
 - MCP (P2): `rmcp` SDK, native adapter over `looqlog-core`
 
+Module specs: [crates/looqlog/CLAUDE.md](crates/looqlog/CLAUDE.md),
+[crates/looqlog-core/CLAUDE.md](crates/looqlog-core/CLAUDE.md), [web/CLAUDE.md](web/CLAUDE.md).
+
+## Packaging and release
+
+- `cargo build` and `cargo install looqlog` need only a Rust toolchain: the built frontend
+  (`index.html`, `assets/index.js`, `assets/index.css`) is committed under `crates/looqlog/assets/`
+  and ships in the crate (ADR-0008). No WebAssembly is built or vendored. `looqlog-core` is
+  published before `looqlog`, which depends on it by path and version.
+- `scripts/build-frontend.sh` is the one rebuild command. Vite and TypeScript are pinned exactly in
+  `web/package.json`, Node to major 24 in CI; the script warns when the local Node major differs.
+  CI rebuilds and fails when `crates/looqlog/assets/` drifts, uploading the rebuilt files as a run
+  artifact.
+- A `v*` tag runs `release.yml`: it fails unless the tag equals the workspace version; builds
+  `x86_64-unknown-linux-musl` (static), `aarch64-apple-darwin`, `x86_64-apple-darwin` and
+  `x86_64-pc-windows-msvc`; smoke-tests each binary on its runner with the same checks
+  (`scripts/smoke-release-binary.sh`: version, every flag in help, serving the page, a stdin line
+  queryable over an authenticated WebSocket — runners have no TTY, so stdin mode); records each size
+  in the release body; and fails when the Linux x86_64 binary exceeds 10 MiB. It then confirms through
+  the GitHub API that the release exists, is not a draft and carries exactly the uploaded asset names,
+  retrying briefly on 404.
+- `Cargo.toml`'s `repository` and the READMEs' clone and Releases links point at
+  `github.com/yushman/looqlog`; `LICENSE` holds the MIT text the `license` field names.
+
 ## Testing
 
 Cover the silent-failure list first — these are the places a bug would be quiet
@@ -80,39 +105,6 @@ rather than loud (see ADR-0004):
 - Parse/filter latency regressions are easy to introduce silently; run `cargo bench`
   on `looqlog-core` before merging changes to its hot paths.
 
-## Spec-driven workflow (OpenSpec) — required
-
-This repo uses OpenSpec. The `openspec/` directory is **mandatory**.
-
-- `openspec/specs/<capability>/spec.md` — current, accepted behavior per capability.
-- `openspec/changes/<name>/` — an in-flight proposal (`proposal.md`, `design.md`,
-  `tasks.md`) before it lands in `specs/`.
-- `openspec/changes/archive/` — completed changes, kept for history.
-
-**No feature work without a change proposal.** Every unit of work larger than a
-bugfix starts as a proposal, is implemented against its `tasks.md`, and is archived
-when done, so that `specs/` always describes what the code actually does.
-
-**The flow is `opsx:explore` → `opsx:ff` → `opsx:apply` → `opsx:archive`, and nothing
-longer.** This is a startup: the point of the spec artifacts is that the next person
-(or agent) can tell what the code is supposed to do, not to run a committee. Use the
-`opsx:` commands, not the slower `openspec-propose` dialogue.
-
-- **`opsx:explore`** — think the problem through and resolve open questions *before*
-  anything lands in `openspec/changes/`. Read the relevant docs/ADRs, ask the user
-  what's ambiguous, decide scope.
-- **`opsx:ff`** ("fast-forward propose") — once explore has resolved the open
-  questions, write `proposal.md` + `design.md` + `specs/*.md` + `tasks.md` directly,
-  in one pass. `openspec validate <name> --strict` must pass before moving on.
-- **`opsx:apply`** — hand the validated `tasks.md` to a fresh subagent: groom in the
-  main session, execute in a clean agent with no leftover context. Verify, don't just
-  trust its self-report.
-- **`opsx:archive`** — after `openspec validate --strict` passes again
-  post-implementation, archive so `openspec/specs/` reflects what actually shipped.
-
-A defect found while verifying an unarchived change is fixed inside that change —
-new tasks appended to its `tasks.md` — not spun out as a follow-up proposal.
-
 ## Working rhythm — required
 
 - **Write an ADR when a decision is expensive to reverse** or when a reader would
@@ -121,9 +113,8 @@ new tasks appended to its `tasks.md` — not spun out as a follow-up proposal.
 
 ## GIT
 
-- **Commit docs and openspec artifacts along with the code they describe.** The specs
-  say what the code is supposed to do and the archived changes say why it was built
-  that way; a clone without them is a clone that cannot answer either question.
+- **Commit docs and specs along with the code they describe.** The specs say what the
+  code is supposed to do; a clone without them is a clone that cannot answer that question.
 
 ## UI
 

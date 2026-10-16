@@ -491,8 +491,6 @@ anywhere, so both appearances render fully with the network disabled.
 - `docs/adr/` — architecture decisions and the alternatives that were rejected
 - `docs/mvp-plan.md` — the day-by-day build plan
 - `docs/devlog.md` — build log, with real measured numbers
-- `openspec/` — the spec-driven change process this project follows; see
-  `openspec/specs/` for the currently accepted behavior
 
 ## License
 
